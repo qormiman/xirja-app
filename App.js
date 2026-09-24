@@ -409,6 +409,172 @@ function BrowseScreen({ categories, items, loading, refreshing, onRefresh, onAdd
 }
 
 // ============================================================================
+// "Compare" screen
+// ============================================================================
+//
+// The app's core value: for each real store, "if everything on this list
+// came from here, plus whatever it doesn't carry bought at whichever
+// OTHER store is cheapest for that item, what's the real total?" -- ranked
+// cheapest to most expensive. This is the same rule the original
+// clickable prototype's storeTotal() used ("comparable" = what this store
+// rings up + the cost of buying its gaps elsewhere), now computed from
+// real data instead of a hardcoded 18-item catalog.
+//
+// Deliberately computed here on the phone, not as a new API endpoint:
+// every number this needs (each item's price at every store that carries
+// it, and its cheapest price anywhere) is already sitting in the `items`
+// this screen is given -- see each item's `by_store` and `cheapest`
+// fields, straight from GET /lists/{user_id}. Sending that same data to a
+// new endpoint just to get a ranking back would be a round-trip for
+// nothing; the actual list of real stores (GET /stores) is the one piece
+// this couldn't derive on its own, since a store carrying zero of today's
+// items wouldn't otherwise appear anywhere in the data at all.
+
+function computeStoreRanking(items, stores) {
+  return stores
+    .map((store) => {
+      let total = 0; // what this store itself rings up
+      let elsewhere = 0; // cost of buying its gaps at their own cheapest store
+      const missingNames = [];
+
+      items.forEach((item) => {
+        const offer = item.by_store.find((o) => o.store_id === store.store_id);
+        if (offer) {
+          total += offer.price * item.quantity;
+        } else {
+          missingNames.push(item.category);
+          if (item.cheapest) {
+            elsewhere += item.cheapest.price * item.quantity;
+          }
+          // an item with NO cheapest anywhere (out of stock everywhere)
+          // simply can't be priced into any store's total -- same gap
+          // for every store, so it doesn't change the ranking either way.
+        }
+      });
+
+      return {
+        ...store,
+        total,
+        elsewhere,
+        comparable: total + elsewhere,
+        missingCount: missingNames.length,
+        missingNames,
+      };
+    })
+    .sort((a, b) => a.comparable - b.comparable);
+}
+
+function CompareScreen({ items, stores, loading, refreshing, onRefresh }) {
+  if (loading) {
+    return (
+      <View style={styles.screen}>
+        <View style={styles.header}>
+          <Text style={styles.title}>Compare</Text>
+        </View>
+        <View style={styles.centerFill}>
+          <ActivityIndicator size="large" />
+        </View>
+      </View>
+    );
+  }
+
+  if (items.length === 0) {
+    return (
+      <View style={styles.screen}>
+        <View style={styles.header}>
+          <Text style={styles.title}>Compare</Text>
+          <Text style={styles.subtitle}>Add something to your list first</Text>
+        </View>
+        <Text style={styles.emptyText}>
+          Compare needs at least one item on "My list" to work out a real total per store.
+        </Text>
+      </View>
+    );
+  }
+
+  if (stores.length === 0) {
+    // Not the same as "no items" -- this means /stores itself hasn't
+    // loaded (still in flight, or its own fetch failed and the error
+    // banner on another tab already says so). Showing this instead of
+    // crashing on an empty ranking below.
+    return (
+      <View style={styles.screen}>
+        <View style={styles.header}>
+          <Text style={styles.title}>Compare</Text>
+          <Text style={styles.subtitle}>Couldn't load the store list</Text>
+        </View>
+        <Text style={styles.emptyText}>Pull down to refresh and try again.</Text>
+      </View>
+    );
+  }
+
+  const ranked = computeStoreRanking(items, stores);
+  const maxComparable = ranked.length ? ranked[ranked.length - 1].comparable : 1;
+  const cheapest = ranked[0];
+  const mostExpensive = ranked[ranked.length - 1];
+  const wouldSave = mostExpensive.comparable - cheapest.comparable;
+
+  return (
+    <View style={styles.screen}>
+      <View style={styles.header}>
+        <Text style={styles.title}>Compare</Text>
+        <Text style={styles.subtitle}>
+          {items.length} item{items.length === 1 ? "" : "s"} · whole basket, per store
+        </Text>
+      </View>
+
+      <FlatList
+        data={ranked}
+        keyExtractor={(store) => store.store_id}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        contentContainerStyle={styles.listContent}
+        ListHeaderComponent={
+          wouldSave > 0 ? (
+            <View style={styles.compareSavingCard}>
+              <Text style={styles.compareSavingLabel}>Cheapest single store vs. most expensive</Text>
+              <Text style={styles.compareSavingValue}>{eur(wouldSave)}</Text>
+              <Text style={styles.compareSavingNote}>
+                {cheapest.name} beats {mostExpensive.name} by this much for the exact same list.
+              </Text>
+            </View>
+          ) : null
+        }
+        renderItem={({ item: store, index }) => (
+          <View style={styles.compareRow}>
+            <View style={styles.compareRowTop}>
+              <Text style={[styles.compareStoreName, index === 0 && styles.compareStoreNameBest]}>
+                {index === 0 ? "★ " : ""}
+                {store.name}
+              </Text>
+              <Text style={[styles.compareTotal, index === 0 && styles.compareStoreNameBest]}>
+                {eur(store.comparable)}
+              </Text>
+            </View>
+            <View style={styles.compareBarTrack}>
+              <View
+                style={[
+                  styles.compareBarFill,
+                  {
+                    width: `${Math.max(6, (store.comparable / maxComparable) * 100)}%`,
+                    backgroundColor: index === 0 ? store.color : "rgba(11,11,11,0.18)",
+                  },
+                ]}
+              />
+            </View>
+            {store.missingCount > 0 && (
+              <Text style={styles.compareNote}>
+                {eur(store.total)} here + {eur(store.elsewhere)} for{" "}
+                {store.missingCount === 1 ? store.missingNames[0] : `${store.missingCount} items`} elsewhere
+              </Text>
+            )}
+          </View>
+        )}
+      />
+    </View>
+  );
+}
+
+// ============================================================================
 // Tab bar + top-level app
 // ============================================================================
 
@@ -416,6 +582,7 @@ function TabBar({ screen, onChange }) {
   const tabs = [
     { key: "list", label: "My list" },
     { key: "browse", label: "Browse" },
+    { key: "compare", label: "Compare" },
   ];
   return (
     <View style={styles.tabBar}>
@@ -437,6 +604,7 @@ export default function App() {
   const [deviceId, setDeviceId] = useState(null);
   const [items, setItems] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [stores, setStores] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [busyItemId, setBusyItemId] = useState(null);
@@ -462,6 +630,12 @@ export default function App() {
       setCategories(categoriesResult.categories);
     } catch (err) {
       setErrorMessage(err.message || "Couldn't load categories");
+    }
+    try {
+      const storesResult = await fetchJson(`/stores`);
+      setStores(storesResult.stores);
+    } catch (err) {
+      setErrorMessage(err.message || "Couldn't load stores");
     }
   }
 
@@ -556,7 +730,7 @@ export default function App() {
           onDec={(it) => handleQuantityChange(it, it.quantity - 1)}
           onRemove={handleRemove}
         />
-      ) : (
+      ) : screen === "browse" ? (
         <BrowseScreen
           categories={categories}
           items={items}
@@ -565,6 +739,14 @@ export default function App() {
           onRefresh={onRefresh}
           onAdd={handleAdd}
           busyCategory={busyCategory}
+        />
+      ) : (
+        <CompareScreen
+          items={items}
+          stores={stores}
+          loading={loading}
+          refreshing={refreshing}
+          onRefresh={onRefresh}
         />
       )}
 
@@ -701,4 +883,30 @@ const styles = StyleSheet.create({
   tabBtnTextActive: { color: "#0b0b0b", fontWeight: "600" },
   tabIndicator: { height: 3, width: 28, borderRadius: 2, marginTop: 8, backgroundColor: "transparent" },
   tabIndicatorActive: { backgroundColor: "#0ca30c" },
+
+  compareSavingCard: {
+    backgroundColor: "#0b0b0b",
+    borderRadius: 16,
+    padding: 18,
+    marginBottom: 14,
+  },
+  compareSavingLabel: { fontSize: 11, color: "rgba(255,255,255,0.6)", textTransform: "uppercase", letterSpacing: 0.6 },
+  compareSavingValue: { fontSize: 30, fontWeight: "700", color: "#ffffff", marginTop: 6 },
+  compareSavingNote: { fontSize: 12.5, color: "rgba(255,255,255,0.7)", marginTop: 8, lineHeight: 17 },
+
+  compareRow: {
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#e1e0d9",
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 9,
+  },
+  compareRowTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "baseline" },
+  compareStoreName: { fontSize: 14, fontWeight: "500", color: "#52514e" },
+  compareStoreNameBest: { color: "#0b0b0b", fontWeight: "700" },
+  compareTotal: { fontSize: 15, fontWeight: "600", color: "#52514e" },
+  compareBarTrack: { height: 9, borderRadius: 5, backgroundColor: "#f1f0ec", overflow: "hidden", marginTop: 8 },
+  compareBarFill: { height: "100%", borderRadius: 5 },
+  compareNote: { fontSize: 11, color: "#898781", marginTop: 7 },
 });
