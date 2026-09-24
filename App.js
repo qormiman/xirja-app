@@ -207,7 +207,7 @@ function AddItemBar({ categories, onAdd, disabled }) {
   );
 }
 
-function ListRow({ item, onInc, onDec, onRemove, busy }) {
+function ListRow({ item, onInc, onDec, onRemove, onOpenDetail, busy }) {
   const { cheapest } = item;
   return (
     <View style={styles.row}>
@@ -217,17 +217,17 @@ function ListRow({ item, onInc, onDec, onRemove, busy }) {
           { backgroundColor: cheapest ? cheapest.color : "rgba(22,23,26,.14)" },
         ]}
       />
-      <View style={styles.rowMain}>
+      <Pressable style={styles.rowMain} onPress={() => onOpenDetail(item)}>
         <Text style={styles.itemName}>{item.category}</Text>
         {cheapest ? (
           <Text style={styles.itemSub}>
             {cheapest.store_name}
-            {item.by_store.length > 1 ? ` · ${item.by_store.length} stores` : ""}
+            {item.by_store.length > 1 ? ` · ${item.by_store.length} stores` : ""} · details
           </Text>
         ) : (
-          <Text style={styles.itemSubMuted}>no price found right now</Text>
+          <Text style={styles.itemSubMuted}>no price found right now · details</Text>
         )}
-      </View>
+      </Pressable>
       <View style={styles.priceCol}>
         <Text style={styles.price}>{cheapest ? eur(cheapest.price * item.quantity) : "—"}</Text>
         <View style={styles.qtyRow}>
@@ -259,6 +259,7 @@ function ListScreen({
   onInc,
   onDec,
   onRemove,
+  onOpenDetail,
 }) {
   const total = items.reduce(
     (sum, it) => sum + (it.cheapest ? it.cheapest.price * it.quantity : 0),
@@ -297,6 +298,7 @@ function ListScreen({
               onInc={(it) => onInc(it)}
               onDec={(it) => onDec(it)}
               onRemove={onRemove}
+              onOpenDetail={onOpenDetail}
             />
           )}
           ItemSeparatorComponent={() => <View style={styles.separator} />}
@@ -309,6 +311,188 @@ function ListScreen({
           }
         />
       )}
+    </View>
+  );
+}
+
+// ============================================================================
+// "Item detail" screen
+// ============================================================================
+//
+// Tapping any item on "My list" opens this. The current-price half (the
+// "Cheapest right now" card and the full "All stores" breakdown) reuses
+// data the list screen already has -- item.cheapest / item.by_store, from
+// GET /lists/{user_id} -- no extra fetch needed for that part. The history
+// half is new: GET /categories/{category}/history is the first endpoint in
+// this app that looks further back than "the single latest price," so it's
+// fetched fresh each time this screen opens for a given item.
+
+function weekLabel(isoDate) {
+  const d = new Date(isoDate);
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function computeTrend(weeks) {
+  if (weeks.length < 2) return null;
+  const first = weeks[0].price;
+  const last = weeks[weeks.length - 1].price;
+  if (first === 0) return null;
+  const pctChange = ((last - first) / first) * 100;
+  if (Math.abs(pctChange) < 1) {
+    return `Roughly flat since ${weekLabel(weeks[0].week_start)}.`;
+  }
+  const direction = pctChange > 0 ? "up" : "down";
+  return `Price is ${direction} ${Math.abs(pctChange).toFixed(0)}% since ${weekLabel(weeks[0].week_start)}.`;
+}
+
+function HistoryBars({ weeks }) {
+  if (weeks.length === 0) {
+    return <Text style={styles.itemSubMuted}>No history yet for this store.</Text>;
+  }
+  const prices = weeks.map((w) => w.price);
+  const maxPrice = Math.max(...prices);
+  const minPrice = Math.min(...prices);
+  const range = maxPrice - minPrice || maxPrice || 1;
+
+  return (
+    <View style={styles.historyBarsRow}>
+      {weeks.map((w, i) => {
+        // Every bar stays at least partly visible (18% floor) even for the
+        // very lowest week -- an empty-looking bar reads as "no data",
+        // which would be misleading when there IS a real price, it's just
+        // the cheapest one in this stretch.
+        const heightPct = 18 + ((w.price - minPrice) / range) * 82;
+        const isLast = i === weeks.length - 1;
+        return (
+          <View key={w.week_start} style={styles.historyBarCol}>
+            <Text style={styles.historyBarPrice}>{eur(w.price)}</Text>
+            <View style={styles.historyBarTrack}>
+              <View
+                style={[
+                  styles.historyBarFill,
+                  { height: `${heightPct}%` },
+                  isLast && styles.historyBarFillLast,
+                ]}
+              />
+            </View>
+            <Text style={styles.historyBarLabel}>{weekLabel(w.week_start)}</Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+function ItemDetailScreen({ item, onBack }) {
+  const [history, setHistory] = useState(null); // null while the first load is in flight
+  const [historyError, setHistoryError] = useState(null);
+  const [selectedStoreId, setSelectedStoreId] = useState(
+    item.cheapest ? item.cheapest.store_id : null
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    setHistory(null);
+    setHistoryError(null);
+    fetchJson(`/categories/${encodeURIComponent(item.category)}/history`)
+      .then((result) => {
+        if (cancelled) return;
+        setHistory(result.stores);
+        if (result.stores.length > 0 && !result.stores.some((s) => s.store_id === selectedStoreId)) {
+          setSelectedStoreId(result.stores[0].store_id);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setHistoryError(err.message || "Couldn't load price history");
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Deliberately keyed on the category alone -- re-fetching if the user
+    // just clicks a different store chip below would be pointless, the
+    // whole history response already contains every store at once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item.category]);
+
+  const selectedStoreHistory = history
+    ? history.find((s) => s.store_id === selectedStoreId)
+    : null;
+  const trendText = selectedStoreHistory ? computeTrend(selectedStoreHistory.weeks) : null;
+
+  return (
+    <View style={styles.screen}>
+      <View style={styles.subHeader}>
+        <Pressable onPress={onBack} style={styles.backBtn}>
+          <Text style={styles.backBtnText}>‹</Text>
+        </Pressable>
+        <View style={styles.subHeaderText}>
+          <Text style={styles.title}>{item.category}</Text>
+          <Text style={styles.subtitle}>
+            {item.by_store.length} store{item.by_store.length === 1 ? "" : "s"} carry this right now
+          </Text>
+        </View>
+      </View>
+
+      <ScrollView contentContainerStyle={styles.listContent}>
+        {item.cheapest ? (
+          <View style={styles.detailBestCard}>
+            <Text style={styles.detailBestLabel}>Cheapest right now</Text>
+            <Text style={styles.detailBestPrice}>{eur(item.cheapest.price)}</Text>
+            <Text style={styles.detailBestStore}>{item.cheapest.store_name}</Text>
+          </View>
+        ) : (
+          <View style={styles.detailBestCard}>
+            <Text style={styles.itemSubMuted}>No price found anywhere right now.</Text>
+          </View>
+        )}
+
+        <Text style={styles.sectionLabel}>All stores</Text>
+        {item.by_store.map((offer) => (
+          <View key={offer.store_id} style={styles.detailOfferRow}>
+            <View style={[styles.detailOfferChip, { backgroundColor: offer.color }]}>
+              <Text style={styles.detailOfferChipText}>{offer.short_code}</Text>
+            </View>
+            <Text style={styles.detailOfferName}>{offer.store_name}</Text>
+            <Text style={styles.detailOfferPrice}>{eur(offer.price)}</Text>
+          </View>
+        ))}
+
+        <Text style={styles.sectionLabel}>8-week price history</Text>
+        {historyError ? (
+          <Text style={styles.errorBannerText}>{historyError}</Text>
+        ) : history === null ? (
+          <View style={styles.centerFillSmall}>
+            <ActivityIndicator />
+          </View>
+        ) : history.length === 0 ? (
+          <Text style={styles.itemSubMuted}>No price history recorded yet for this category.</Text>
+        ) : (
+          <View style={styles.historyCard}>
+            <View style={styles.historyChipsRow}>
+              {history.map((s) => {
+                const active = s.store_id === selectedStoreId;
+                return (
+                  <Pressable
+                    key={s.store_id}
+                    onPress={() => setSelectedStoreId(s.store_id)}
+                    style={[
+                      styles.historyChip,
+                      { borderColor: s.color },
+                      active && { backgroundColor: s.color },
+                    ]}
+                  >
+                    <Text style={[styles.historyChipText, active && styles.historyChipTextActive]}>
+                      {s.short_code}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            {selectedStoreHistory && <HistoryBars weeks={selectedStoreHistory.weeks} />}
+            {trendText && <Text style={styles.historyTrend}>{trendText}</Text>}
+          </View>
+        )}
+      </ScrollView>
     </View>
   );
 }
@@ -760,6 +944,12 @@ export default function App() {
   const [busyItemId, setBusyItemId] = useState(null);
   const [busyCategory, setBusyCategory] = useState(null);
   const [errorMessage, setErrorMessage] = useState(null);
+  const [detailItemId, setDetailItemId] = useState(null); // which item's detail screen is open, if any
+
+  // Looked up fresh from `items` each render (not a snapshot taken when the
+  // screen opened) so a quantity change made just before opening detail --
+  // or a price refresh while it's open -- is always reflected, not stale.
+  const detailItem = detailItemId ? items.find((it) => it.item_id === detailItemId) : null;
 
   async function loadEverything(id) {
     // Deliberately NOT Promise.all -- these are two independent pieces of
@@ -797,6 +987,17 @@ export default function App() {
       setLoading(false);
     })();
   }, []);
+
+  useEffect(() => {
+    // Covers removing an item (or a refresh dropping it, e.g. it stopped
+    // being priced anywhere) while its detail screen happens to be open --
+    // rather than showing a detail screen for an item that no longer
+    // exists, just fall back to the list.
+    if (detailItemId && !items.some((it) => it.item_id === detailItemId)) {
+      setDetailItemId(null);
+      setScreen("list");
+    }
+  }, [items, detailItemId]);
 
   async function onRefresh() {
     if (!deviceId) return;
@@ -879,6 +1080,18 @@ export default function App() {
           onInc={(it) => handleQuantityChange(it, it.quantity + 1)}
           onDec={(it) => handleQuantityChange(it, it.quantity - 1)}
           onRemove={handleRemove}
+          onOpenDetail={(item) => {
+            setDetailItemId(item.item_id);
+            setScreen("detail");
+          }}
+        />
+      ) : screen === "detail" && detailItem ? (
+        <ItemDetailScreen
+          item={detailItem}
+          onBack={() => {
+            setDetailItemId(null);
+            setScreen("list");
+          }}
         />
       ) : screen === "browse" ? (
         <BrowseScreen
@@ -899,11 +1112,35 @@ export default function App() {
           onRefresh={onRefresh}
           onSplit={() => setScreen("storelists")}
         />
-      ) : (
+      ) : screen === "storelists" ? (
         <StoreListsScreen items={items} onBack={() => setScreen("compare")} />
+      ) : (
+        // Covers "detail" with no matching item left (e.g. it was just
+        // removed) for the one render before the effect above catches up
+        // and sends screen back to "list" -- falls back to My list instead
+        // of momentarily showing the wrong screen.
+        <ListScreen
+          items={items}
+          categories={categories}
+          loading={loading}
+          refreshing={refreshing}
+          busyItemId={busyItemId}
+          errorMessage={errorMessage}
+          onRefresh={onRefresh}
+          onAdd={handleAdd}
+          onInc={(it) => handleQuantityChange(it, it.quantity + 1)}
+          onDec={(it) => handleQuantityChange(it, it.quantity - 1)}
+          onRemove={handleRemove}
+          onOpenDetail={(item) => {
+            setDetailItemId(item.item_id);
+            setScreen("detail");
+          }}
+        />
       )}
 
-      {screen !== "storelists" && <TabBar screen={screen} onChange={setScreen} />}
+      {screen !== "storelists" && screen !== "detail" && (
+        <TabBar screen={screen} onChange={setScreen} />
+      )}
     </SafeAreaView>
   );
 }
@@ -1114,6 +1351,101 @@ const styles = StyleSheet.create({
     color: "#898781",
     marginTop: 4,
     lineHeight: 16,
+  },
+
+  centerFillSmall: { paddingVertical: 24, alignItems: "center" },
+  sectionLabel: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#898781",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    marginTop: 20,
+    marginBottom: 9,
+  },
+
+  detailBestCard: {
+    backgroundColor: "#0b0b0b",
+    borderRadius: 16,
+    padding: 18,
+    alignItems: "flex-start",
+  },
+  detailBestLabel: {
+    fontSize: 10.5,
+    fontWeight: "600",
+    color: "rgba(255,255,255,0.55)",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+  },
+  detailBestPrice: { fontSize: 32, fontWeight: "700", color: "#ffffff", marginTop: 8 },
+  detailBestStore: { fontSize: 13, fontWeight: "500", color: "oklch(0.80 0.16 152)", marginTop: 6 },
+
+  detailOfferRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#e1e0d9",
+    borderRadius: 14,
+    paddingVertical: 11,
+    paddingHorizontal: 12,
+    marginBottom: 8,
+  },
+  detailOfferChip: {
+    width: 30,
+    height: 30,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 11,
+  },
+  detailOfferChipText: { fontSize: 10, fontWeight: "700", color: "#ffffff" },
+  detailOfferName: { flex: 1, fontSize: 14, fontWeight: "500", color: "#0b0b0b" },
+  detailOfferPrice: { fontSize: 15, fontWeight: "700", color: "#0b0b0b" },
+
+  historyCard: {
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#e1e0d9",
+    borderRadius: 16,
+    padding: 16,
+  },
+  historyChipsRow: { flexDirection: "row", gap: 7, marginBottom: 16, flexWrap: "wrap" },
+  historyChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 10,
+    borderWidth: 1.5,
+  },
+  historyChipText: { fontSize: 11.5, fontWeight: "700", color: "#0b0b0b" },
+  historyChipTextActive: { color: "#ffffff" },
+
+  historyBarsRow: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    justifyContent: "space-between",
+    height: 150,
+  },
+  historyBarCol: { flex: 1, alignItems: "center", height: "100%", justifyContent: "flex-end" },
+  historyBarPrice: { fontSize: 9.5, color: "#898781", marginBottom: 4 },
+  historyBarTrack: {
+    width: 16,
+    flex: 1,
+    justifyContent: "flex-end",
+    backgroundColor: "#f1f0ec",
+    borderRadius: 4,
+    overflow: "hidden",
+  },
+  historyBarFill: { width: "100%", backgroundColor: "rgba(11,11,11,0.28)", borderRadius: 4 },
+  historyBarFillLast: { backgroundColor: "#0ca30c" },
+  historyBarLabel: { fontSize: 9, color: "#898781", marginTop: 6 },
+  historyTrend: {
+    fontSize: 12,
+    color: "#52514e",
+    marginTop: 14,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#f1f0ec",
   },
 
   compareRow: {
