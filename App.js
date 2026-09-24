@@ -1,24 +1,26 @@
 /**
- * Xirja -- "My list", "Browse", "Compare", and "Store lists".
+ * Xirja -- "My list", "Browse", "Compare", "Store lists", "Item detail",
+ * and "Shopping mode".
  *
- * Four real screens now. Three of them ("My list", "Browse", "Compare")
- * sit behind a simple tab bar -- still local state choosing which screen to
- * show, not the full React Navigation library (fine for 3 tabs, won't
- * scale cleanly much further -- a real navigation library is a known next
- * step, see PROGRESS.md). "Store lists" is reached from a button at the
- * bottom of Compare rather than its own tab, the same way the original
- * clickable prototype linked the two: Compare answers "what if I bought
- * everything at ONE store", Store lists answers the complementary
- * question -- "if I split the trip, buying each item wherever it's
- * individually cheapest, what does each stop look like" -- so it reads as
- * an action taken FROM Compare, not a fourth equal destination. It has its
- * own back arrow (no tab bar while it's open), matching how the prototype
- * treated its own sub-screens.
+ * Six real screens now. Three of them ("My list", "Browse", "Compare") sit
+ * behind a simple tab bar -- still local state choosing which screen to
+ * show, not the full React Navigation library (fine for 3 tabs plus a few
+ * tap/button-reached sub-screens, won't scale cleanly much further -- a
+ * real navigation library is a known next step, see PROGRESS.md). The
+ * other three are reached by tapping/tapping-through rather than their own
+ * tabs, each one an action taken FROM somewhere rather than an equal
+ * destination, matching how the original clickable prototype linked them:
+ * tap an item on "My list" -> "Item detail"; tap "Split into N store
+ * lists" on Compare -> "Store lists"; tap a store card there -> "Shopping
+ * mode" for that stop, with its own store switcher to jump straight to the
+ * next unfinished one. Each has its own back arrow and hides the tab bar
+ * while open, same as the prototype's own sub-screens did.
  *
  * Still NOT in this app (comes later): the price-correction workflow, the
- * other 5 designed screens (Item detail, Shopping mode, Trip summary,
- * Settings, Onboarding), a real navigation library, and a real login (see
- * DEVICE_ID_STORAGE_KEY below).
+ * other 3 designed screens (Trip summary, Settings, Onboarding), a real
+ * navigation library, persisting Shopping mode's checked-off state past an
+ * app reload (currently in-memory only, see ShoppingScreen's comment), and
+ * a real login (see DEVICE_ID_STORAGE_KEY below).
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -835,10 +837,11 @@ function computeStoreLists(items) {
   return { groups, maxTotal, unpriced };
 }
 
-function StoreListCard({ group, maxTotal }) {
+function StoreListCard({ group, maxTotal, checkedCount, onOpen }) {
   const preview = group.items.map((it) => it.category).join(", ");
+  const allChecked = checkedCount >= group.items.length;
   return (
-    <View style={styles.storeListCard}>
+    <Pressable style={styles.storeListCard} onPress={onOpen}>
       <View style={styles.storeListTop}>
         <View style={[styles.storeListChip, { backgroundColor: group.color }]}>
           <Text style={styles.storeListChipText}>{group.shortCode}</Text>
@@ -846,7 +849,11 @@ function StoreListCard({ group, maxTotal }) {
         <View style={styles.storeListMain}>
           <Text style={styles.storeListName}>{group.name}</Text>
           <Text style={styles.storeListMeta}>
-            {group.items.length} item{group.items.length === 1 ? "" : "s"}
+            {allChecked
+              ? "All done ✓"
+              : checkedCount > 0
+              ? `${checkedCount} of ${group.items.length} checked`
+              : `${group.items.length} item${group.items.length === 1 ? "" : "s"}`}
           </Text>
         </View>
         <Text style={styles.storeListTotal}>{eur(group.total)}</Text>
@@ -865,11 +872,14 @@ function StoreListCard({ group, maxTotal }) {
       <Text style={styles.storeListPreview} numberOfLines={2}>
         {preview}
       </Text>
-    </View>
+      <Text style={styles.storeListOpenHint}>
+        {allChecked ? "Tap to review" : "Tap to start shopping here →"}
+      </Text>
+    </Pressable>
   );
 }
 
-function StoreListsScreen({ items, onBack }) {
+function StoreListsScreen({ items, checkedItemIds, onBack, onOpenShopping }) {
   const { groups, maxTotal, unpriced } = useMemo(() => computeStoreLists(items), [items]);
 
   return (
@@ -890,7 +900,14 @@ function StoreListsScreen({ items, onBack }) {
         data={groups}
         keyExtractor={(g) => g.storeId}
         contentContainerStyle={styles.listContent}
-        renderItem={({ item: group }) => <StoreListCard group={group} maxTotal={maxTotal} />}
+        renderItem={({ item: group }) => (
+          <StoreListCard
+            group={group}
+            maxTotal={maxTotal}
+            checkedCount={group.items.filter((it) => checkedItemIds.has(it.item_id)).length}
+            onOpen={() => onOpenShopping(group.storeId)}
+          />
+        )}
         ListEmptyComponent={
           <Text style={styles.emptyText}>Nothing to split yet -- add items with a real price first.</Text>
         }
@@ -904,6 +921,171 @@ function StoreListsScreen({ items, onBack }) {
           ) : null
         }
       />
+    </View>
+  );
+}
+
+// ============================================================================
+// "Shopping mode" screen
+// ============================================================================
+//
+// Reached by tapping a store card on Store lists -- a real checklist for
+// that one stop: tick items off as they land in the trolley, watch the
+// running total update, and jump straight to the next unfinished store
+// without detouring back through Store lists first. Checked-off state
+// lives only in memory for now (see `checkedItemIds` in App()) -- it
+// resets if the app reloads mid-trip. That's a real, known gap (see
+// PROGRESS.md), not an oversight: persisting it (AsyncStorage, keyed by
+// list_id) is a small enough follow-up that it wasn't worth blocking this
+// screen on. Deliberately no barcode scanning and no "fix this price" /
+// "swap store" actions here, unlike the original prototype -- those need
+// a camera and the price-correction workflow respectively, neither of
+// which exist yet (see PROGRESS.md's "Not started" section).
+
+function ShoppingRow({ item, checked, onToggle }) {
+  return (
+    <Pressable
+      onPress={onToggle}
+      style={[styles.shoppingRow, checked && styles.shoppingRowChecked]}
+    >
+      <View style={[styles.shoppingCheckbox, checked && styles.shoppingCheckboxChecked]}>
+        {checked && <Text style={styles.shoppingCheckMark}>✓</Text>}
+      </View>
+      <View style={styles.rowMain}>
+        <Text style={[styles.itemName, checked && styles.shoppingTextChecked]}>
+          {item.category}
+        </Text>
+        <Text style={[styles.itemSubMuted, checked && styles.shoppingTextChecked]}>
+          Qty {item.quantity}
+        </Text>
+      </View>
+      <Text style={[styles.price, checked && styles.shoppingTextChecked]}>{eur(item.lineTotal)}</Text>
+    </Pressable>
+  );
+}
+
+function ShoppingScreen({ items, checkedItemIds, onToggleItem, storeId, onSwitchStore, onBack }) {
+  const { groups } = useMemo(() => computeStoreLists(items), [items]);
+  const group = groups.find((g) => g.storeId === storeId);
+
+  if (!group) {
+    // The store this shopping trip was for no longer has any items
+    // assigned to it (removed, or its cheapest store changed since) --
+    // nothing left to shop here, so give a way back rather than an empty
+    // screen with no exit.
+    return (
+      <View style={styles.screen}>
+        <View style={styles.subHeader}>
+          <Pressable onPress={onBack} style={styles.backBtn}>
+            <Text style={styles.backBtnText}>‹</Text>
+          </Pressable>
+          <View style={styles.subHeaderText}>
+            <Text style={styles.title}>Shopping</Text>
+            <Text style={styles.subtitle}>This store's list is empty now</Text>
+          </View>
+        </View>
+        <Text style={styles.emptyText}>
+          Everything that was here has moved or been removed -- back to Store lists to see what's left.
+        </Text>
+      </View>
+    );
+  }
+
+  const checkedCount = group.items.filter((it) => checkedItemIds.has(it.item_id)).length;
+  const totalCount = group.items.length;
+  const pct = totalCount > 0 ? checkedCount / totalCount : 0;
+  const spent = group.items
+    .filter((it) => checkedItemIds.has(it.item_id))
+    .reduce((sum, it) => sum + it.lineTotal, 0);
+
+  const nextUnfinished = groups.find(
+    (g) => g.storeId !== group.storeId && g.items.some((it) => !checkedItemIds.has(it.item_id))
+  );
+
+  return (
+    <View style={styles.screen}>
+      <View style={styles.subHeader}>
+        <Pressable onPress={onBack} style={styles.backBtn}>
+          <Text style={styles.backBtnText}>‹</Text>
+        </Pressable>
+        <View style={styles.subHeaderText}>
+          <Text style={styles.title}>{group.name}</Text>
+          <Text style={styles.subtitle}>
+            {checkedCount} of {totalCount} checked · {eur(spent)} of {eur(group.total)}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.shoppingProgressWrap}>
+        <View style={styles.compareBarTrack}>
+          <View
+            style={[
+              styles.compareBarFill,
+              { width: `${Math.max(4, pct * 100)}%`, backgroundColor: group.color },
+            ]}
+          />
+        </View>
+      </View>
+
+      {groups.length > 1 && (
+        <View style={styles.shoppingSwitcherRow}>
+          {groups.map((g) => {
+            const active = g.storeId === group.storeId;
+            const gDone = g.items.every((it) => checkedItemIds.has(it.item_id));
+            return (
+              <Pressable
+                key={g.storeId}
+                onPress={() => onSwitchStore(g.storeId)}
+                style={[
+                  styles.shoppingSwitcherChip,
+                  { borderColor: g.color },
+                  active && { backgroundColor: g.color },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.shoppingSwitcherChipText,
+                    active && styles.shoppingSwitcherChipTextActive,
+                  ]}
+                >
+                  {g.shortCode}
+                  {gDone ? " ✓" : ""}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      )}
+
+      <FlatList
+        data={group.items}
+        keyExtractor={(it) => it.item_id}
+        contentContainerStyle={styles.listContent}
+        renderItem={({ item }) => (
+          <ShoppingRow
+            item={item}
+            checked={checkedItemIds.has(item.item_id)}
+            onToggle={() => onToggleItem(item.item_id)}
+          />
+        )}
+        ItemSeparatorComponent={() => <View style={styles.separator} />}
+      />
+
+      <View style={styles.bottomBarWrap}>
+        {nextUnfinished ? (
+          <Pressable onPress={() => onSwitchStore(nextUnfinished.storeId)} style={styles.bottomBarButton}>
+            <Text style={styles.bottomBarButtonText}>Next: {nextUnfinished.name}</Text>
+            <Text style={styles.bottomBarArrow}>→</Text>
+          </Pressable>
+        ) : (
+          <Pressable onPress={onBack} style={styles.bottomBarButton}>
+            <Text style={styles.bottomBarButtonText}>
+              {checkedCount === totalCount ? "Done -- back to store lists" : "Back to store lists"}
+            </Text>
+            <Text style={styles.bottomBarArrow}>→</Text>
+          </Pressable>
+        )}
+      </View>
     </View>
   );
 }
@@ -945,6 +1127,8 @@ export default function App() {
   const [busyCategory, setBusyCategory] = useState(null);
   const [errorMessage, setErrorMessage] = useState(null);
   const [detailItemId, setDetailItemId] = useState(null); // which item's detail screen is open, if any
+  const [shoppingStoreId, setShoppingStoreId] = useState(null); // which store's shopping mode is open, if any
+  const [checkedItemIds, setCheckedItemIds] = useState(() => new Set()); // in-memory only, see ShoppingScreen's comment
 
   // Looked up fresh from `items` each render (not a snapshot taken when the
   // screen opened) so a quantity change made just before opening detail --
@@ -1063,6 +1247,18 @@ export default function App() {
     }
   }
 
+  function handleToggleChecked(itemId) {
+    setCheckedItemIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(itemId)) {
+        next.delete(itemId);
+      } else {
+        next.add(itemId);
+      }
+      return next;
+    });
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" />
@@ -1113,7 +1309,24 @@ export default function App() {
           onSplit={() => setScreen("storelists")}
         />
       ) : screen === "storelists" ? (
-        <StoreListsScreen items={items} onBack={() => setScreen("compare")} />
+        <StoreListsScreen
+          items={items}
+          checkedItemIds={checkedItemIds}
+          onBack={() => setScreen("compare")}
+          onOpenShopping={(storeId) => {
+            setShoppingStoreId(storeId);
+            setScreen("shopping");
+          }}
+        />
+      ) : screen === "shopping" ? (
+        <ShoppingScreen
+          items={items}
+          checkedItemIds={checkedItemIds}
+          onToggleItem={handleToggleChecked}
+          storeId={shoppingStoreId}
+          onSwitchStore={setShoppingStoreId}
+          onBack={() => setScreen("storelists")}
+        />
       ) : (
         // Covers "detail" with no matching item left (e.g. it was just
         // removed) for the one render before the effect above catches up
@@ -1138,7 +1351,7 @@ export default function App() {
         />
       )}
 
-      {screen !== "storelists" && screen !== "detail" && (
+      {screen !== "storelists" && screen !== "detail" && screen !== "shopping" && (
         <TabBar screen={screen} onChange={setScreen} />
       )}
     </SafeAreaView>
@@ -1346,6 +1559,7 @@ const styles = StyleSheet.create({
   storeListMeta: { fontSize: 11.5, color: "#898781", marginTop: 3 },
   storeListTotal: { fontSize: 16, fontWeight: "700", color: "#0b0b0b" },
   storeListPreview: { fontSize: 12, color: "#52514e", marginTop: 9, lineHeight: 17 },
+  storeListOpenHint: { fontSize: 11.5, fontWeight: "600", color: "#0ca30c", marginTop: 10 },
   storeListFootnote: {
     fontSize: 11.5,
     color: "#898781",
@@ -1447,6 +1661,49 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: "#f1f0ec",
   },
+
+  shoppingProgressWrap: { paddingHorizontal: 20, marginBottom: 4 },
+
+  shoppingSwitcherRow: {
+    flexDirection: "row",
+    gap: 7,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    flexWrap: "wrap",
+  },
+  shoppingSwitcherChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 10,
+    borderWidth: 1.5,
+  },
+  shoppingSwitcherChipText: { fontSize: 11.5, fontWeight: "700", color: "#0b0b0b" },
+  shoppingSwitcherChipTextActive: { color: "#ffffff" },
+
+  shoppingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#e1e0d9",
+    borderRadius: 14,
+    paddingVertical: 13,
+    paddingHorizontal: 14,
+  },
+  shoppingRowChecked: { backgroundColor: "#f6f5f1", borderColor: "#e1e0d9" },
+  shoppingCheckbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: "#c9c7bf",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 13,
+  },
+  shoppingCheckboxChecked: { backgroundColor: "#0ca30c", borderColor: "#0ca30c" },
+  shoppingCheckMark: { fontSize: 13, fontWeight: "700", color: "#ffffff" },
+  shoppingTextChecked: { color: "#a8a69f", textDecorationLine: "line-through" },
 
   compareRow: {
     backgroundColor: "#ffffff",
