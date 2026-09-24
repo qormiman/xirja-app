@@ -1,245 +1,452 @@
 /**
- * Xirja -- "My List" screen, first real end-to-end slice.
+ * Xirja -- "My list" screen, now genuinely usable.
  *
- * What this proves: that a real phone screen can ask the real API for a
- * real price, and show it. It is deliberately NOT the finished "My List"
- * screen from the design prototype yet -- there's no adding/removing
- * items, no persistence, no swipe gestures. Those come once this one
- * piece (data flowing all the way from Postgres, through the API, onto a
- * screen) is confirmed working.
+ * What changed from the first version: that one showed 4 hardcoded
+ * categories with no way to add, remove, or change them -- it only proved
+ * the phone-to-database connection worked. This version is a real list:
+ * type to search a category (e.g. "Milk"), tap to add it, adjust quantity,
+ * swipe-free remove button, pull to refresh. Every read and write goes
+ * through the real API, backed by the real app_list / app_list_item
+ * tables -- nothing here is stored only on the phone except which device
+ * this is (see DEVICE_USER_ID below).
  *
- * The list of categories below is a fixed, hand-picked starter set --
- * replace CATEGORIES with whatever you want to see prices for. Once the
- * real "add an item to my list" feature exists (a later step -- it needs
- * the app_list / app_list_item tables wired up), this hardcoded list goes
- * away entirely.
+ * Still NOT in this screen (comes later, once this is confirmed working):
+ * navigation to the other 8 designed screens, the price-correction
+ * workflow, and multi-store comparison/splitting -- this is still just
+ * "My list" on its own.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
+  Keyboard,
+  Pressable,
   RefreshControl,
   SafeAreaView,
   StatusBar,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // ---------------------------------------------------------------------
-// Already set to your real, deployed Render API -- this is the default
-// going forward, so you shouldn't need to touch this most of the time.
+// Already set to the real, deployed Render API -- shouldn't need to touch
+// this most of the time.
 //
 // The one reason to CHANGE THIS: testing against the API running on your
-// own computer instead (e.g. to try something before it's deployed).
-// Requires your phone and computer on the same WiFi, and using your
-// computer's LAN address, e.g. "http://192.168.1.23:8000" (NOT
-// "localhost" -- your phone can't reach "localhost" meaning itself). Find
-// your computer's LAN address in SETUP.md -> "Running the API locally,
-// for quick testing". Switch this back to the Render address below
-// afterwards.
+// own computer instead. Requires your phone and computer on the same
+// WiFi, and your computer's LAN address, e.g. "http://192.168.1.23:8000"
+// (NOT "localhost" -- your phone can't reach "localhost" meaning itself).
+// See ../SETUP.md in xirja-backend -> "Running the API locally". Switch
+// this back to the Render address afterwards.
 // ---------------------------------------------------------------------
 const API_BASE_URL = "https://xirja-backend.onrender.com";
 
-const CATEGORIES = ["Milk", "Eggs", "Bread", "Olive Oil"];
+const REQUEST_TIMEOUT_MS = 45000; // see fetchJson()'s comment for why 45s
+
+// ---------------------------------------------------------------------
+// On DEVICE_USER_ID: there's no real login system yet -- accounts are a
+// later step (see PROGRESS.md in xirja-backend). Until then, each phone
+// generates one random id the first time this app opens and keeps it in
+// AsyncStorage (survives closing the app; wiped if you reinstall it or
+// clear app data). It's meaningless outside "which list is this
+// device's" -- not an email, not a name, nothing personal.
+// ---------------------------------------------------------------------
+const DEVICE_ID_STORAGE_KEY = "xirja_device_user_id";
+
+function makeDeviceId() {
+  // Good enough to be practically unique for "one phone's list" -- not
+  // trying to be cryptographically unguessable, since there's nothing
+  // sensitive behind it (see the CORS comment in api/main.py).
+  return "device_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 10);
+}
+
+async function getDeviceId() {
+  const existing = await AsyncStorage.getItem(DEVICE_ID_STORAGE_KEY);
+  if (existing) return existing;
+  const created = makeDeviceId();
+  await AsyncStorage.setItem(DEVICE_ID_STORAGE_KEY, created);
+  return created;
+}
 
 /**
- * Fetches the cheapest current price for one category from the real API.
- * Returns a plain result object rather than throwing, so the list can show
- * a per-item error state instead of one failed item breaking the screen.
+ * Wraps fetch() with a timeout and consistent error shapes -- fetch() has
+ * no built-in timeout, and left alone a request that never gets a
+ * response (a WiFi network silently dropping it, or Render's free tier
+ * waking up from sleep) shows a permanent spinner with no explanation
+ * instead of a clear, recoverable error.
  */
-async function fetchCheapest(category) {
-  // fetch() has no built-in timeout -- left alone, a request that never
-  // gets a response (e.g. the WiFi network silently drops it instead of
-  // refusing it, which some networks do for security) just hangs forever,
-  // showing a permanent loading spinner with no explanation. This forces
-  // it to give up and report a clear error instead.
-  //
-  // 45 seconds, not something shorter, specifically because of Render's
-  // free tier: it "sleeps" the API after 15 idle minutes, and the first
-  // request after that can take 30-60 seconds just to wake it back up
-  // (see SETUP.md). A shorter timeout would fail almost every cold start
-  // before Render even finishes waking up -- found by hitting exactly
-  // that with an earlier, too-aggressive 10-second version of this.
+async function fetchJson(path, options = {}) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 45000);
-
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    const response = await fetch(
-      `${API_BASE_URL}/categories/${encodeURIComponent(category)}/prices`,
-      { signal: controller.signal }
-    );
-    if (response.status === 404) {
-      return { category, status: "not_found" };
-    }
+    const response = await fetch(`${API_BASE_URL}${path}`, {
+      ...options,
+      signal: controller.signal,
+      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    });
     if (!response.ok) {
-      return { category, status: "error", message: `Server said ${response.status}` };
+      let detail = `Server said ${response.status}`;
+      try {
+        const body = await response.json();
+        if (body && body.detail) detail = body.detail;
+      } catch (_e) {
+        // response wasn't JSON -- keep the generic message above
+      }
+      throw new Error(detail);
     }
-    const data = await response.json();
-    return { category, status: "ok", cheapest: data.cheapest };
+    return await response.json();
   } catch (err) {
     if (err.name === "AbortError") {
-      return {
-        category,
-        status: "error",
-        message: "Timed out -- try pulling to refresh (Render may be waking up)",
-      };
+      throw new Error("Timed out -- try again (Render may be waking up)");
     }
-    // Almost always means API_BASE_URL is unreachable -- wrong address,
-    // phone and computer not on the same WiFi, or the server isn't
-    // running. See SETUP.md's troubleshooting section.
-    return { category, status: "error", message: "Couldn't reach the API" };
+    throw err;
   } finally {
     clearTimeout(timeoutId);
   }
 }
 
-function ListRow({ item }) {
-  if (item.status === "loading") {
-    return (
-      <View style={styles.row}>
-        <Text style={styles.itemName}>{item.category}</Text>
-        <ActivityIndicator size="small" />
-      </View>
-    );
+const eur = (n) => "€" + n.toFixed(2);
+
+function AddItemBar({ categories, onAdd, disabled }) {
+  const [query, setQuery] = useState("");
+  const inputRef = useRef(null);
+
+  const suggestions = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    return categories
+      .filter((c) => c.category.toLowerCase().includes(q))
+      .slice(0, 5);
+  }, [query, categories]);
+
+  function pick(category) {
+    onAdd(category);
+    setQuery("");
+    Keyboard.dismiss();
   }
 
-  if (item.status === "not_found") {
-    return (
-      <View style={styles.row}>
-        <Text style={styles.itemName}>{item.category}</Text>
-        <Text style={styles.muted}>no price found</Text>
+  return (
+    <View style={styles.addWrap}>
+      <View style={styles.addInputRow}>
+        <Text style={styles.addPlus}>+</Text>
+        <TextInput
+          ref={inputRef}
+          value={query}
+          onChangeText={setQuery}
+          placeholder="Add an item… (e.g. Milk)"
+          style={styles.addInput}
+          editable={!disabled}
+          returnKeyType="done"
+          onSubmitEditing={() => {
+            if (suggestions.length > 0) pick(suggestions[0].category);
+          }}
+        />
       </View>
-    );
-  }
+      {suggestions.length > 0 && (
+        <View style={styles.suggestBox}>
+          {suggestions.map((s) => (
+            <Pressable
+              key={s.category}
+              onPress={() => pick(s.category)}
+              style={({ pressed }) => [
+                styles.suggestRow,
+                pressed && styles.suggestRowPressed,
+              ]}
+            >
+              <Text style={styles.suggestName}>{s.category}</Text>
+              <Text style={styles.suggestHint}>{s.store_count} store{s.store_count === 1 ? "" : "s"}</Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
+    </View>
+  );
+}
 
-  if (item.status === "error") {
-    return (
-      <View style={styles.row}>
-        <Text style={styles.itemName}>{item.category}</Text>
-        <Text style={styles.errorText}>{item.message}</Text>
-      </View>
-    );
-  }
-
+function ListRow({ item, onInc, onDec, onRemove, busy }) {
   const { cheapest } = item;
   return (
     <View style={styles.row}>
-      <View style={styles.rowLeft}>
+      <View
+        style={[
+          styles.ribbon,
+          { backgroundColor: cheapest ? cheapest.color : "rgba(22,23,26,.14)" },
+        ]}
+      />
+      <View style={styles.rowMain}>
         <Text style={styles.itemName}>{item.category}</Text>
-        <Text style={styles.productName} numberOfLines={1}>
-          {cheapest.product_name} · {cheapest.store_name}
-        </Text>
+        {cheapest ? (
+          <Text style={styles.itemSub}>
+            {cheapest.store_name}
+            {item.by_store.length > 1 ? ` · ${item.by_store.length} stores` : ""}
+          </Text>
+        ) : (
+          <Text style={styles.itemSubMuted}>no price found right now</Text>
+        )}
       </View>
-      <Text style={styles.price}>&euro;{cheapest.price.toFixed(2)}</Text>
+      <View style={styles.priceCol}>
+        <Text style={styles.price}>{cheapest ? eur(cheapest.price * item.quantity) : "—"}</Text>
+        <View style={styles.qtyRow}>
+          <Pressable onPress={() => onDec(item)} disabled={busy} style={styles.qtyBtn}>
+            <Text style={styles.qtyBtnText}>−</Text>
+          </Pressable>
+          <Text style={styles.qtyValue}>{item.quantity}</Text>
+          <Pressable onPress={() => onInc(item)} disabled={busy} style={styles.qtyBtn}>
+            <Text style={styles.qtyBtnText}>+</Text>
+          </Pressable>
+        </View>
+      </View>
+      <Pressable onPress={() => onRemove(item)} disabled={busy} style={styles.removeBtn}>
+        <Text style={styles.removeBtnText}>✕</Text>
+      </Pressable>
     </View>
   );
 }
 
 export default function App() {
-  const [items, setItems] = useState(
-    CATEGORIES.map((category) => ({ category, status: "loading" }))
-  );
+  const [deviceId, setDeviceId] = useState(null);
+  const [items, setItems] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [busyItemId, setBusyItemId] = useState(null);
+  const [errorMessage, setErrorMessage] = useState(null);
 
-  async function loadPrices() {
-    const results = await Promise.all(CATEGORIES.map(fetchCheapest));
-    setItems(results);
+  async function loadEverything(id) {
+    try {
+      setErrorMessage(null);
+      const [listResult, categoriesResult] = await Promise.all([
+        fetchJson(`/lists/${id}`),
+        fetchJson(`/categories`),
+      ]);
+      setItems(listResult.items);
+      setCategories(categoriesResult.categories);
+    } catch (err) {
+      setErrorMessage(err.message || "Couldn't reach the API");
+    }
   }
 
   useEffect(() => {
-    loadPrices();
+    (async () => {
+      const id = await getDeviceId();
+      setDeviceId(id);
+      await loadEverything(id);
+      setLoading(false);
+    })();
   }, []);
 
   async function onRefresh() {
+    if (!deviceId) return;
     setRefreshing(true);
-    await loadPrices();
+    await loadEverything(deviceId);
     setRefreshing(false);
   }
+
+  async function handleAdd(category) {
+    if (!deviceId) return;
+    try {
+      setErrorMessage(null);
+      const result = await fetchJson(`/lists/${deviceId}/items`, {
+        method: "POST",
+        body: JSON.stringify({ category, quantity: 1 }),
+      });
+      setItems(result.items);
+    } catch (err) {
+      setErrorMessage(err.message || "Couldn't add that item");
+    }
+  }
+
+  async function handleQuantityChange(item, nextQuantity) {
+    if (!deviceId) return;
+    setBusyItemId(item.item_id);
+    try {
+      setErrorMessage(null);
+      if (nextQuantity <= 0) {
+        const result = await fetchJson(`/lists/${deviceId}/items/${item.item_id}`, {
+          method: "DELETE",
+        });
+        setItems(result.items);
+      } else {
+        const result = await fetchJson(`/lists/${deviceId}/items/${item.item_id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ quantity: nextQuantity }),
+        });
+        setItems(result.items);
+      }
+    } catch (err) {
+      setErrorMessage(err.message || "Couldn't update that item");
+    } finally {
+      setBusyItemId(null);
+    }
+  }
+
+  async function handleRemove(item) {
+    if (!deviceId) return;
+    setBusyItemId(item.item_id);
+    try {
+      setErrorMessage(null);
+      const result = await fetchJson(`/lists/${deviceId}/items/${item.item_id}`, {
+        method: "DELETE",
+      });
+      setItems(result.items);
+    } catch (err) {
+      setErrorMessage(err.message || "Couldn't remove that item");
+    } finally {
+      setBusyItemId(null);
+    }
+  }
+
+  const total = items.reduce(
+    (sum, it) => sum + (it.cheapest ? it.cheapest.price * it.quantity : 0),
+    0
+  );
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" />
       <View style={styles.header}>
         <Text style={styles.title}>My list</Text>
-        <Text style={styles.subtitle}>Cheapest price right now, per item</Text>
+        <Text style={styles.subtitle}>
+          {items.length} item{items.length === 1 ? "" : "s"} · {eur(total)} at cheapest prices
+        </Text>
       </View>
-      <FlatList
-        data={items}
-        keyExtractor={(item) => item.category}
-        renderItem={({ item }) => <ListRow item={item} />}
-        ItemSeparatorComponent={() => <View style={styles.separator} />}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-        }
-        contentContainerStyle={styles.listContent}
-      />
+
+      <AddItemBar categories={categories} onAdd={handleAdd} disabled={loading} />
+
+      {errorMessage && (
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorBannerText}>{errorMessage}</Text>
+        </View>
+      )}
+
+      {loading ? (
+        <View style={styles.centerFill}>
+          <ActivityIndicator size="large" />
+        </View>
+      ) : (
+        <FlatList
+          data={items}
+          keyExtractor={(item) => item.item_id}
+          renderItem={({ item }) => (
+            <ListRow
+              item={item}
+              busy={busyItemId === item.item_id}
+              onInc={(it) => handleQuantityChange(it, it.quantity + 1)}
+              onDec={(it) => handleQuantityChange(it, it.quantity - 1)}
+              onRemove={handleRemove}
+            />
+          )}
+          ItemSeparatorComponent={() => <View style={styles.separator} />}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
+          contentContainerStyle={styles.listContent}
+          ListEmptyComponent={
+            <Text style={styles.emptyText}>Nothing on the list yet -- add something above.</Text>
+          }
+        />
+      )}
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: "#fcfcfb",
+  safeArea: { flex: 1, backgroundColor: "#fcfcfb" },
+  header: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 8 },
+  title: { fontSize: 24, fontWeight: "600", color: "#0b0b0b" },
+  subtitle: { fontSize: 13, color: "#52514e", marginTop: 2 },
+
+  addWrap: { paddingHorizontal: 20, paddingBottom: 6 },
+  addInputRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#e1e0d9",
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
   },
-  header: {
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 12,
+  addPlus: { fontSize: 16, fontWeight: "600", color: "#0ca30c" },
+  addInput: { flex: 1, fontSize: 15, color: "#0b0b0b" },
+  suggestBox: {
+    marginTop: 6,
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#e1e0d9",
+    borderRadius: 14,
+    overflow: "hidden",
   },
-  title: {
-    fontSize: 24,
-    fontWeight: "600",
-    color: "#0b0b0b",
+  suggestRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#f1f0ec",
   },
-  subtitle: {
-    fontSize: 13,
-    color: "#52514e",
-    marginTop: 2,
+  suggestRowPressed: { backgroundColor: "#f6f5f1" },
+  suggestName: { fontSize: 14, fontWeight: "500", color: "#0b0b0b" },
+  suggestHint: { fontSize: 11, color: "#898781" },
+
+  errorBanner: {
+    marginHorizontal: 20,
+    marginBottom: 6,
+    backgroundColor: "#fdecec",
+    borderColor: "#f3c3c3",
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
   },
-  listContent: {
-    paddingHorizontal: 20,
-    paddingBottom: 24,
-  },
+  errorBannerText: { color: "#d03b3b", fontSize: 12.5 },
+
+  centerFill: { flex: 1, alignItems: "center", justifyContent: "center" },
+
+  listContent: { paddingHorizontal: 20, paddingBottom: 24, paddingTop: 4 },
   row: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    paddingVertical: 14,
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#e1e0d9",
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingRight: 10,
+    overflow: "hidden",
   },
-  rowLeft: {
-    flexShrink: 1,
-    paddingRight: 12,
+  ribbon: { width: 5, alignSelf: "stretch", marginRight: 12 },
+  rowMain: { flex: 1, minWidth: 0 },
+  itemName: { fontSize: 15, fontWeight: "500", color: "#0b0b0b" },
+  itemSub: { marginTop: 4, fontSize: 11.5, color: "#52514e" },
+  itemSubMuted: { marginTop: 4, fontSize: 11.5, color: "#898781" },
+  priceCol: { alignItems: "flex-end", marginRight: 8 },
+  price: { fontSize: 15, fontWeight: "700", color: "#0b0b0b" },
+  qtyRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 6 },
+  qtyBtn: {
+    width: 26,
+    height: 26,
+    borderRadius: 8,
+    backgroundColor: "#f1f0ec",
+    alignItems: "center",
+    justifyContent: "center",
   },
-  itemName: {
-    fontSize: 16,
-    fontWeight: "500",
-    color: "#0b0b0b",
-  },
-  productName: {
-    fontSize: 12.5,
+  qtyBtnText: { fontSize: 15, fontWeight: "600", color: "#0b0b0b" },
+  qtyValue: { fontSize: 13, fontWeight: "600", color: "#0b0b0b", minWidth: 14, textAlign: "center" },
+  removeBtn: { padding: 8 },
+  removeBtnText: { fontSize: 14, color: "#898781" },
+
+  separator: { height: 9 },
+  emptyText: {
+    textAlign: "center",
+    marginTop: 40,
+    fontSize: 14,
     color: "#898781",
-    marginTop: 2,
-  },
-  price: {
-    fontSize: 17,
-    fontWeight: "600",
-    color: "#0b0b0b",
-  },
-  muted: {
-    fontSize: 13,
-    color: "#898781",
-  },
-  errorText: {
-    fontSize: 12.5,
-    color: "#d03b3b",
-    maxWidth: 160,
-    textAlign: "right",
-  },
-  separator: {
-    height: 1,
-    backgroundColor: "#e1e0d9",
   },
 });
