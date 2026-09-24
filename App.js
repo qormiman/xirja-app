@@ -1,19 +1,24 @@
 /**
- * Xirja -- "My list" + "Browse", the app's first bit of real navigation.
+ * Xirja -- "My list", "Browse", "Compare", and "Store lists".
  *
- * What changed from the previous version: that one was "My list" alone,
- * where the only way to add something was typing its exact category name.
- * This adds a second real screen, Browse -- scroll every category that
- * currently has a real price behind it, tap + to add it -- and a simple
- * two-tab bar to switch between them. This is deliberately NOT the full
- * React Navigation library yet (no need for it with 2 screens) -- just
- * local state choosing which screen to show, the simplest thing that
- * works. Swapping in real navigation later, once there are more screens,
- * won't change how either screen's own logic works.
+ * Four real screens now. Three of them ("My list", "Browse", "Compare")
+ * sit behind a simple tab bar -- still local state choosing which screen to
+ * show, not the full React Navigation library (fine for 3 tabs, won't
+ * scale cleanly much further -- a real navigation library is a known next
+ * step, see PROGRESS.md). "Store lists" is reached from a button at the
+ * bottom of Compare rather than its own tab, the same way the original
+ * clickable prototype linked the two: Compare answers "what if I bought
+ * everything at ONE store", Store lists answers the complementary
+ * question -- "if I split the trip, buying each item wherever it's
+ * individually cheapest, what does each stop look like" -- so it reads as
+ * an action taken FROM Compare, not a fourth equal destination. It has its
+ * own back arrow (no tab bar while it's open), matching how the prototype
+ * treated its own sub-screens.
  *
- * Still NOT in this app (comes later): Compare (the multi-store
- * ranking/splitting logic), the price-correction workflow, the other 6
- * designed screens, and a real login (see DEVICE_ID_STORAGE_KEY below).
+ * Still NOT in this app (comes later): the price-correction workflow, the
+ * other 5 designed screens (Item detail, Shopping mode, Trip summary,
+ * Settings, Onboarding), a real navigation library, and a real login (see
+ * DEVICE_ID_STORAGE_KEY below).
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -24,6 +29,7 @@ import {
   Pressable,
   RefreshControl,
   SafeAreaView,
+  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
@@ -464,7 +470,7 @@ function computeStoreRanking(items, stores) {
     .sort((a, b) => a.comparable - b.comparable);
 }
 
-function CompareScreen({ items, stores, loading, refreshing, onRefresh }) {
+function CompareScreen({ items, stores, loading, refreshing, onRefresh, onSplit }) {
   if (loading) {
     return (
       <View style={styles.screen}>
@@ -485,9 +491,14 @@ function CompareScreen({ items, stores, loading, refreshing, onRefresh }) {
           <Text style={styles.title}>Compare</Text>
           <Text style={styles.subtitle}>Add something to your list first</Text>
         </View>
-        <Text style={styles.emptyText}>
-          Compare needs at least one item on "My list" to work out a real total per store.
-        </Text>
+        <ScrollView
+          contentContainerStyle={styles.centerFill}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        >
+          <Text style={styles.emptyText}>
+            Compare needs at least one item on "My list" to work out a real total per store.
+          </Text>
+        </ScrollView>
       </View>
     );
   }
@@ -495,15 +506,21 @@ function CompareScreen({ items, stores, loading, refreshing, onRefresh }) {
   if (stores.length === 0) {
     // Not the same as "no items" -- this means /stores itself hasn't
     // loaded (still in flight, or its own fetch failed and the error
-    // banner on another tab already says so). Showing this instead of
-    // crashing on an empty ranking below.
+    // banner on another tab already said so). Wrapped in a real
+    // pull-to-refresh (not just text telling you to) so there's an actual
+    // way to retry from here, same as every other screen.
     return (
       <View style={styles.screen}>
         <View style={styles.header}>
           <Text style={styles.title}>Compare</Text>
           <Text style={styles.subtitle}>Couldn't load the store list</Text>
         </View>
-        <Text style={styles.emptyText}>Pull down to refresh and try again.</Text>
+        <ScrollView
+          contentContainerStyle={styles.centerFill}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        >
+          <Text style={styles.emptyText}>Pull down to refresh and try again.</Text>
+        </ScrollView>
       </View>
     );
   }
@@ -513,6 +530,7 @@ function CompareScreen({ items, stores, loading, refreshing, onRefresh }) {
   const cheapest = ranked[0];
   const mostExpensive = ranked[ranked.length - 1];
   const wouldSave = mostExpensive.comparable - cheapest.comparable;
+  const splitStopCount = computeStoreLists(items).groups.length;
 
   return (
     <View style={styles.screen}>
@@ -569,6 +587,138 @@ function CompareScreen({ items, stores, loading, refreshing, onRefresh }) {
             )}
           </View>
         )}
+      />
+
+      {splitStopCount > 1 && (
+        <View style={styles.bottomBarWrap}>
+          <Pressable onPress={onSplit} style={styles.bottomBarButton}>
+            <Text style={styles.bottomBarButtonText}>
+              Split into {splitStopCount} store lists
+            </Text>
+            <Text style={styles.bottomBarArrow}>→</Text>
+          </Pressable>
+        </View>
+      )}
+    </View>
+  );
+}
+
+// ============================================================================
+// "Store lists" screen
+// ============================================================================
+//
+// Compare answers "what if I bought everything at ONE store" -- this
+// answers the other real question: if you're willing to make more than one
+// stop, buying each item wherever it's individually cheapest, what does
+// each stop's list actually look like? Same underlying per-item data as
+// Compare (`item.cheapest`, already resolved by the API) -- just grouped
+// by store instead of ranked as whole-basket totals. Reached from
+// Compare's "Split into N store lists" button, mirroring the original
+// clickable prototype's own flow (that button led to this exact screen
+// there too). Only offered when splitting would actually involve more
+// than one store -- if everything's cheapest at the same single store,
+// Compare's own ranking already tells you that and there's nothing to
+// split.
+
+function computeStoreLists(items) {
+  const byStore = {};
+  let unpriced = 0;
+
+  items.forEach((item) => {
+    if (!item.cheapest) {
+      unpriced += 1;
+      return; // nothing anywhere has a price for this right now -- it
+               // can't be assigned to any store's list.
+    }
+    const store = item.cheapest;
+    const lineTotal = store.price * item.quantity;
+    if (!byStore[store.store_id]) {
+      byStore[store.store_id] = {
+        storeId: store.store_id,
+        name: store.store_name,
+        shortCode: store.short_code,
+        color: store.color,
+        items: [],
+        total: 0,
+      };
+    }
+    byStore[store.store_id].items.push({ ...item, lineTotal });
+    byStore[store.store_id].total += lineTotal;
+  });
+
+  const groups = Object.values(byStore).sort((a, b) => b.total - a.total);
+  const maxTotal = groups.reduce((m, g) => Math.max(m, g.total), 0);
+  return { groups, maxTotal, unpriced };
+}
+
+function StoreListCard({ group, maxTotal }) {
+  const preview = group.items.map((it) => it.category).join(", ");
+  return (
+    <View style={styles.storeListCard}>
+      <View style={styles.storeListTop}>
+        <View style={[styles.storeListChip, { backgroundColor: group.color }]}>
+          <Text style={styles.storeListChipText}>{group.shortCode}</Text>
+        </View>
+        <View style={styles.storeListMain}>
+          <Text style={styles.storeListName}>{group.name}</Text>
+          <Text style={styles.storeListMeta}>
+            {group.items.length} item{group.items.length === 1 ? "" : "s"}
+          </Text>
+        </View>
+        <Text style={styles.storeListTotal}>{eur(group.total)}</Text>
+      </View>
+      <View style={styles.compareBarTrack}>
+        <View
+          style={[
+            styles.compareBarFill,
+            {
+              width: `${maxTotal > 0 ? Math.max(6, (group.total / maxTotal) * 100) : 6}%`,
+              backgroundColor: group.color,
+            },
+          ]}
+        />
+      </View>
+      <Text style={styles.storeListPreview} numberOfLines={2}>
+        {preview}
+      </Text>
+    </View>
+  );
+}
+
+function StoreListsScreen({ items, onBack }) {
+  const { groups, maxTotal, unpriced } = useMemo(() => computeStoreLists(items), [items]);
+
+  return (
+    <View style={styles.screen}>
+      <View style={styles.subHeader}>
+        <Pressable onPress={onBack} style={styles.backBtn}>
+          <Text style={styles.backBtnText}>‹</Text>
+        </Pressable>
+        <View style={styles.subHeaderText}>
+          <Text style={styles.title}>Store lists</Text>
+          <Text style={styles.subtitle}>
+            {groups.length} stop{groups.length === 1 ? "" : "s"} · each item at its own cheapest store
+          </Text>
+        </View>
+      </View>
+
+      <FlatList
+        data={groups}
+        keyExtractor={(g) => g.storeId}
+        contentContainerStyle={styles.listContent}
+        renderItem={({ item: group }) => <StoreListCard group={group} maxTotal={maxTotal} />}
+        ListEmptyComponent={
+          <Text style={styles.emptyText}>Nothing to split yet -- add items with a real price first.</Text>
+        }
+        ListFooterComponent={
+          unpriced > 0 ? (
+            <Text style={styles.storeListFootnote}>
+              {unpriced} item{unpriced === 1 ? "" : "s"} on your list currently{" "}
+              {unpriced === 1 ? "has" : "have"} no price anywhere, so{" "}
+              {unpriced === 1 ? "it isn't" : "they aren't"} in any list below.
+            </Text>
+          ) : null
+        }
       />
     </View>
   );
@@ -740,17 +890,20 @@ export default function App() {
           onAdd={handleAdd}
           busyCategory={busyCategory}
         />
-      ) : (
+      ) : screen === "compare" ? (
         <CompareScreen
           items={items}
           stores={stores}
           loading={loading}
           refreshing={refreshing}
           onRefresh={onRefresh}
+          onSplit={() => setScreen("storelists")}
         />
+      ) : (
+        <StoreListsScreen items={items} onBack={() => setScreen("compare")} />
       )}
 
-      <TabBar screen={screen} onChange={setScreen} />
+      {screen !== "storelists" && <TabBar screen={screen} onChange={setScreen} />}
     </SafeAreaView>
   );
 }
@@ -893,6 +1046,75 @@ const styles = StyleSheet.create({
   compareSavingLabel: { fontSize: 11, color: "rgba(255,255,255,0.6)", textTransform: "uppercase", letterSpacing: 0.6 },
   compareSavingValue: { fontSize: 30, fontWeight: "700", color: "#ffffff", marginTop: 6 },
   compareSavingNote: { fontSize: 12.5, color: "rgba(255,255,255,0.7)", marginTop: 8, lineHeight: 17 },
+
+  bottomBarWrap: {
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    paddingBottom: 8,
+    backgroundColor: "#fcfcfb",
+    borderTopWidth: 1,
+    borderTopColor: "#e1e0d9",
+  },
+  bottomBarButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 15,
+    paddingHorizontal: 18,
+    borderRadius: 14,
+    backgroundColor: "#0ca30c",
+  },
+  bottomBarButtonText: { fontSize: 15, fontWeight: "600", color: "#ffffff" },
+  bottomBarArrow: { fontSize: 16, fontWeight: "700", color: "#ffffff" },
+
+  subHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 8,
+  },
+  subHeaderText: { flex: 1, minWidth: 0 },
+  backBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: "#f1f0ec",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  backBtnText: { fontSize: 20, fontWeight: "600", color: "#0b0b0b", marginTop: -2 },
+
+  storeListCard: {
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#e1e0d9",
+    borderRadius: 16,
+    padding: 15,
+    marginBottom: 10,
+  },
+  storeListTop: { flexDirection: "row", alignItems: "center", marginBottom: 10 },
+  storeListChip: {
+    width: 38,
+    height: 38,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+  },
+  storeListChipText: { fontSize: 12, fontWeight: "700", color: "#ffffff" },
+  storeListMain: { flex: 1, minWidth: 0 },
+  storeListName: { fontSize: 16, fontWeight: "600", color: "#0b0b0b" },
+  storeListMeta: { fontSize: 11.5, color: "#898781", marginTop: 3 },
+  storeListTotal: { fontSize: 16, fontWeight: "700", color: "#0b0b0b" },
+  storeListPreview: { fontSize: 12, color: "#52514e", marginTop: 9, lineHeight: 17 },
+  storeListFootnote: {
+    fontSize: 11.5,
+    color: "#898781",
+    marginTop: 4,
+    lineHeight: 16,
+  },
 
   compareRow: {
     backgroundColor: "#ffffff",
