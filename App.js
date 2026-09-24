@@ -1,19 +1,19 @@
 /**
- * Xirja -- "My list" screen, now genuinely usable.
+ * Xirja -- "My list" + "Browse", the app's first bit of real navigation.
  *
- * What changed from the first version: that one showed 4 hardcoded
- * categories with no way to add, remove, or change them -- it only proved
- * the phone-to-database connection worked. This version is a real list:
- * type to search a category (e.g. "Milk"), tap to add it, adjust quantity,
- * swipe-free remove button, pull to refresh. Every read and write goes
- * through the real API, backed by the real app_list / app_list_item
- * tables -- nothing here is stored only on the phone except which device
- * this is (see DEVICE_USER_ID below).
+ * What changed from the previous version: that one was "My list" alone,
+ * where the only way to add something was typing its exact category name.
+ * This adds a second real screen, Browse -- scroll every category that
+ * currently has a real price behind it, tap + to add it -- and a simple
+ * two-tab bar to switch between them. This is deliberately NOT the full
+ * React Navigation library yet (no need for it with 2 screens) -- just
+ * local state choosing which screen to show, the simplest thing that
+ * works. Swapping in real navigation later, once there are more screens,
+ * won't change how either screen's own logic works.
  *
- * Still NOT in this screen (comes later, once this is confirmed working):
- * navigation to the other 8 designed screens, the price-correction
- * workflow, and multi-store comparison/splitting -- this is still just
- * "My list" on its own.
+ * Still NOT in this app (comes later): Compare (the multi-store
+ * ranking/splitting logic), the price-correction workflow, the other 6
+ * designed screens, and a real login (see DEVICE_ID_STORAGE_KEY below).
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -58,9 +58,6 @@ const REQUEST_TIMEOUT_MS = 45000; // see fetchJson()'s comment for why 45s
 const DEVICE_ID_STORAGE_KEY = "xirja_device_user_id";
 
 function makeDeviceId() {
-  // Good enough to be practically unique for "one phone's list" -- not
-  // trying to be cryptographically unguessable, since there's nothing
-  // sensitive behind it (see the CORS comment in api/main.py).
   return "device_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 10);
 }
 
@@ -110,6 +107,10 @@ async function fetchJson(path, options = {}) {
 }
 
 const eur = (n) => "€" + n.toFixed(2);
+
+// ============================================================================
+// "My list" screen
+// ============================================================================
 
 function AddItemBar({ categories, onAdd, disabled }) {
   const [query, setQuery] = useState("");
@@ -207,13 +208,206 @@ function ListRow({ item, onInc, onDec, onRemove, busy }) {
   );
 }
 
+function ListScreen({
+  items,
+  categories,
+  loading,
+  refreshing,
+  busyItemId,
+  errorMessage,
+  onRefresh,
+  onAdd,
+  onInc,
+  onDec,
+  onRemove,
+}) {
+  const total = items.reduce(
+    (sum, it) => sum + (it.cheapest ? it.cheapest.price * it.quantity : 0),
+    0
+  );
+
+  return (
+    <View style={styles.screen}>
+      <View style={styles.header}>
+        <Text style={styles.title}>My list</Text>
+        <Text style={styles.subtitle}>
+          {items.length} item{items.length === 1 ? "" : "s"} · {eur(total)} at cheapest prices
+        </Text>
+      </View>
+
+      <AddItemBar categories={categories} onAdd={onAdd} disabled={loading} />
+
+      {errorMessage && (
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorBannerText}>{errorMessage}</Text>
+        </View>
+      )}
+
+      {loading ? (
+        <View style={styles.centerFill}>
+          <ActivityIndicator size="large" />
+        </View>
+      ) : (
+        <FlatList
+          data={items}
+          keyExtractor={(item) => item.item_id}
+          renderItem={({ item }) => (
+            <ListRow
+              item={item}
+              busy={busyItemId === item.item_id}
+              onInc={(it) => onInc(it)}
+              onDec={(it) => onDec(it)}
+              onRemove={onRemove}
+            />
+          )}
+          ItemSeparatorComponent={() => <View style={styles.separator} />}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
+          contentContainerStyle={styles.listContent}
+          ListEmptyComponent={
+            <Text style={styles.emptyText}>Nothing on the list yet -- add something above, or switch to Browse.</Text>
+          }
+        />
+      )}
+    </View>
+  );
+}
+
+// ============================================================================
+// "Browse" screen
+// ============================================================================
+//
+// Scrolls every category that currently has a real price behind it (the
+// same /categories the "My list" search box already uses), letting you
+// tap + to add one without needing to know/type its exact name. Tapping +
+// again just adds another one -- same "bump the quantity" behaviour as
+// typing the same category twice in "My list".
+
+function BrowseRow({ entry, inCartQuantity, onAdd, busy }) {
+  const added = inCartQuantity > 0;
+  return (
+    <View style={styles.browseRow}>
+      <View style={styles.rowMain}>
+        <Text style={styles.itemName}>{entry.category}</Text>
+        <Text style={styles.itemSubMuted}>
+          {entry.store_count} store{entry.store_count === 1 ? "" : "s"} carry this right now
+        </Text>
+      </View>
+      <Pressable
+        onPress={() => onAdd(entry.category)}
+        disabled={busy}
+        style={[styles.browseAddBtn, added && styles.browseAddBtnActive]}
+      >
+        <Text style={[styles.browseAddBtnText, added && styles.browseAddBtnTextActive]}>
+          {added ? `✓ ${inCartQuantity}` : "+ Add"}
+        </Text>
+      </Pressable>
+    </View>
+  );
+}
+
+function BrowseScreen({ categories, items, loading, refreshing, onRefresh, onAdd, busyCategory }) {
+  const [query, setQuery] = useState("");
+
+  const quantityByCategory = useMemo(() => {
+    const map = {};
+    items.forEach((it) => {
+      map[it.category] = it.quantity;
+    });
+    return map;
+  }, [items]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return categories;
+    return categories.filter((c) => c.category.toLowerCase().includes(q));
+  }, [query, categories]);
+
+  return (
+    <View style={styles.screen}>
+      <View style={styles.header}>
+        <Text style={styles.title}>Browse</Text>
+        <Text style={styles.subtitle}>
+          {categories.length} categor{categories.length === 1 ? "y" : "ies"} with a live price right now
+        </Text>
+      </View>
+
+      <View style={styles.addWrap}>
+        <View style={styles.addInputRow}>
+          <Text style={styles.addPlus}>⌕</Text>
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Filter categories…"
+            style={styles.addInput}
+          />
+        </View>
+      </View>
+
+      {loading ? (
+        <View style={styles.centerFill}>
+          <ActivityIndicator size="large" />
+        </View>
+      ) : (
+        <FlatList
+          data={filtered}
+          keyExtractor={(entry) => entry.category}
+          renderItem={({ item: entry }) => (
+            <BrowseRow
+              entry={entry}
+              inCartQuantity={quantityByCategory[entry.category] || 0}
+              onAdd={onAdd}
+              busy={busyCategory === entry.category}
+            />
+          )}
+          ItemSeparatorComponent={() => <View style={styles.separator} />}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
+          contentContainerStyle={styles.listContent}
+          ListEmptyComponent={
+            <Text style={styles.emptyText}>No categories match that search.</Text>
+          }
+        />
+      )}
+    </View>
+  );
+}
+
+// ============================================================================
+// Tab bar + top-level app
+// ============================================================================
+
+function TabBar({ screen, onChange }) {
+  const tabs = [
+    { key: "list", label: "My list" },
+    { key: "browse", label: "Browse" },
+  ];
+  return (
+    <View style={styles.tabBar}>
+      {tabs.map((t) => {
+        const active = screen === t.key;
+        return (
+          <Pressable key={t.key} onPress={() => onChange(t.key)} style={styles.tabBtn}>
+            <Text style={[styles.tabBtnText, active && styles.tabBtnTextActive]}>{t.label}</Text>
+            <View style={[styles.tabIndicator, active && styles.tabIndicatorActive]} />
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
 export default function App() {
+  const [screen, setScreen] = useState("list");
   const [deviceId, setDeviceId] = useState(null);
   const [items, setItems] = useState([]);
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [busyItemId, setBusyItemId] = useState(null);
+  const [busyCategory, setBusyCategory] = useState(null);
   const [errorMessage, setErrorMessage] = useState(null);
 
   async function loadEverything(id) {
@@ -248,6 +442,7 @@ export default function App() {
 
   async function handleAdd(category) {
     if (!deviceId) return;
+    setBusyCategory(category);
     try {
       setErrorMessage(null);
       const result = await fetchJson(`/lists/${deviceId}/items`, {
@@ -257,6 +452,8 @@ export default function App() {
       setItems(result.items);
     } catch (err) {
       setErrorMessage(err.message || "Couldn't add that item");
+    } finally {
+      setBusyCategory(null);
     }
   }
 
@@ -300,62 +497,44 @@ export default function App() {
     }
   }
 
-  const total = items.reduce(
-    (sum, it) => sum + (it.cheapest ? it.cheapest.price * it.quantity : 0),
-    0
-  );
-
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" />
-      <View style={styles.header}>
-        <Text style={styles.title}>My list</Text>
-        <Text style={styles.subtitle}>
-          {items.length} item{items.length === 1 ? "" : "s"} · {eur(total)} at cheapest prices
-        </Text>
-      </View>
 
-      <AddItemBar categories={categories} onAdd={handleAdd} disabled={loading} />
-
-      {errorMessage && (
-        <View style={styles.errorBanner}>
-          <Text style={styles.errorBannerText}>{errorMessage}</Text>
-        </View>
-      )}
-
-      {loading ? (
-        <View style={styles.centerFill}>
-          <ActivityIndicator size="large" />
-        </View>
+      {screen === "list" ? (
+        <ListScreen
+          items={items}
+          categories={categories}
+          loading={loading}
+          refreshing={refreshing}
+          busyItemId={busyItemId}
+          errorMessage={errorMessage}
+          onRefresh={onRefresh}
+          onAdd={handleAdd}
+          onInc={(it) => handleQuantityChange(it, it.quantity + 1)}
+          onDec={(it) => handleQuantityChange(it, it.quantity - 1)}
+          onRemove={handleRemove}
+        />
       ) : (
-        <FlatList
-          data={items}
-          keyExtractor={(item) => item.item_id}
-          renderItem={({ item }) => (
-            <ListRow
-              item={item}
-              busy={busyItemId === item.item_id}
-              onInc={(it) => handleQuantityChange(it, it.quantity + 1)}
-              onDec={(it) => handleQuantityChange(it, it.quantity - 1)}
-              onRemove={handleRemove}
-            />
-          )}
-          ItemSeparatorComponent={() => <View style={styles.separator} />}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-          }
-          contentContainerStyle={styles.listContent}
-          ListEmptyComponent={
-            <Text style={styles.emptyText}>Nothing on the list yet -- add something above.</Text>
-          }
+        <BrowseScreen
+          categories={categories}
+          items={items}
+          loading={loading}
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          onAdd={handleAdd}
+          busyCategory={busyCategory}
         />
       )}
+
+      <TabBar screen={screen} onChange={setScreen} />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: "#fcfcfb" },
+  screen: { flex: 1 },
   header: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 8 },
   title: { fontSize: 24, fontWeight: "600", color: "#0b0b0b" },
   subtitle: { fontSize: 13, color: "#52514e", marginTop: 2 },
@@ -442,6 +621,26 @@ const styles = StyleSheet.create({
   removeBtn: { padding: 8 },
   removeBtnText: { fontSize: 14, color: "#898781" },
 
+  browseRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#e1e0d9",
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  browseAddBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 10,
+    backgroundColor: "#0b0b0b",
+  },
+  browseAddBtnActive: { backgroundColor: "#e7f6e7" },
+  browseAddBtnText: { fontSize: 12.5, fontWeight: "600", color: "#ffffff" },
+  browseAddBtnTextActive: { color: "#0ca30c" },
+
   separator: { height: 9 },
   emptyText: {
     textAlign: "center",
@@ -449,4 +648,16 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#898781",
   },
+
+  tabBar: {
+    flexDirection: "row",
+    borderTopWidth: 1,
+    borderTopColor: "#e1e0d9",
+    backgroundColor: "#fcfcfb",
+  },
+  tabBtn: { flex: 1, alignItems: "center", paddingTop: 10, paddingBottom: 12 },
+  tabBtnText: { fontSize: 13, fontWeight: "500", color: "#898781" },
+  tabBtnTextActive: { color: "#0b0b0b", fontWeight: "600" },
+  tabIndicator: { height: 3, width: 28, borderRadius: 2, marginTop: 8, backgroundColor: "transparent" },
+  tabIndicatorActive: { backgroundColor: "#0ca30c" },
 });
