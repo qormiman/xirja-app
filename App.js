@@ -75,8 +75,19 @@ async function getDeviceId() {
  * response (a WiFi network silently dropping it, or Render's free tier
  * waking up from sleep) shows a permanent spinner with no explanation
  * instead of a clear, recoverable error.
+ *
+ * Also retries ONCE, automatically, on a true network-level failure (the
+ * browser's own "Failed to fetch" / "Network request failed" -- thrown
+ * before any HTTP response comes back at all, as opposed to the server
+ * responding with an error status). This specific failure is the classic
+ * symptom of Render's free tier waking from sleep: the very first request
+ * that reaches a sleeping service wakes it up but can itself get refused
+ * or reset while the container is still starting, while a request a
+ * second or two later succeeds normally. One retry, after a short pause,
+ * covers exactly that window without masking a REAL, repeatable problem
+ * (which would fail the retry too, and still surface as an error).
  */
-async function fetchJson(path, options = {}) {
+async function fetchJsonOnce(path, options) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
@@ -103,6 +114,28 @@ async function fetchJson(path, options = {}) {
     throw err;
   } finally {
     clearTimeout(timeoutId);
+  }
+}
+
+function isNetworkLevelFailure(err) {
+  // What the browser/React Native throw when a request never got a
+  // response at all -- distinct from the server answering with a 4xx/5xx
+  // (handled above) or our own explicit timeout message.
+  const msg = (err && err.message) || "";
+  return msg.includes("Failed to fetch") || msg.includes("Network request failed");
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchJson(path, options = {}) {
+  try {
+    return await fetchJsonOnce(path, options);
+  } catch (err) {
+    if (!isNetworkLevelFailure(err)) throw err;
+    await sleep(1500);
+    return await fetchJsonOnce(path, options); // let a second failure throw normally
   }
 }
 
@@ -411,16 +444,24 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState(null);
 
   async function loadEverything(id) {
+    // Deliberately NOT Promise.all -- these are two independent pieces of
+    // data (the list, and the category picker), and one failing shouldn't
+    // throw away the other's already-successful result. Each one reports
+    // its own failure into the same banner; if both fail, the second
+    // message simply overwrites the first, which is fine since fixing
+    // either one (retrying) reloads both anyway.
+    setErrorMessage(null);
     try {
-      setErrorMessage(null);
-      const [listResult, categoriesResult] = await Promise.all([
-        fetchJson(`/lists/${id}`),
-        fetchJson(`/categories`),
-      ]);
+      const listResult = await fetchJson(`/lists/${id}`);
       setItems(listResult.items);
+    } catch (err) {
+      setErrorMessage(err.message || "Couldn't load your list");
+    }
+    try {
+      const categoriesResult = await fetchJson(`/categories`);
       setCategories(categoriesResult.categories);
     } catch (err) {
-      setErrorMessage(err.message || "Couldn't reach the API");
+      setErrorMessage(err.message || "Couldn't load categories");
     }
   }
 
