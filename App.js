@@ -37,7 +37,6 @@ import {
   Keyboard,
   Pressable,
   RefreshControl,
-  SafeAreaView,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -46,7 +45,16 @@ import {
   View,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { SafeAreaProvider } from "react-native-safe-area-context";
+// `SafeAreaView` from "react-native-safe-area-context" (NOT the "react-native"
+// one used previously) -- the plain "react-native" `SafeAreaView` is an
+// iOS-only no-op: on Android it's just a plain `View` and reserves no space
+// at all for the status bar. That's exactly why "My list"'s header rendered
+// underneath the status bar clock/icons on a real Android install (visible
+// in Snack too, but Snack's web preview has no real status bar to overlap,
+// which is why this one was never caught until the app was actually
+// installed on a phone). This version genuinely pads for the safe area on
+// both platforms.
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { NavigationContainer } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
@@ -256,7 +264,7 @@ function AddItemBar({ categories, onAdd, disabled, onBrowse }) {
           ref={inputRef}
           value={query}
           onChangeText={setQuery}
-          placeholder="Add an item… (e.g. Milk)"
+          placeholder="Add an item…"
           style={styles.addInput}
           editable={!disabled}
           returnKeyType="done"
@@ -393,10 +401,6 @@ function ListScreen({
   onBrowse,
   onGoToCompare,
 }) {
-  const total = items.reduce(
-    (sum, it) => sum + (it.cheapest ? it.cheapest.price * it.quantity : 0),
-    0
-  );
   const totalSavings = items.reduce((sum, it) => {
     if (!it.cheapest || it.by_store.length <= 1) return sum;
     return sum + (Math.max(...it.by_store.map((s) => s.price)) - it.cheapest.price) * it.quantity;
@@ -405,11 +409,16 @@ function ListScreen({
   return (
     <View style={styles.screen}>
       <View style={styles.header}>
-        <Text style={styles.title}>My list</Text>
-        <ListLabelEditor listLabel={listLabel} onSetListLabel={onSetListLabel} />
-        <Text style={styles.subtitle}>
-          {items.length} item{items.length === 1 ? "" : "s"} · {eur(total)} at cheapest prices
-        </Text>
+        <View style={styles.headerRow}>
+          <View style={styles.headerLeft}>
+            <Text style={styles.title}>My list</Text>
+            <ListLabelEditor listLabel={listLabel} onSetListLabel={onSetListLabel} />
+          </View>
+          <View style={styles.headerCount}>
+            <Text style={styles.headerCountNumber}>{items.length}</Text>
+            <Text style={styles.headerCountLabel}>{items.length === 1 ? "item" : "items"}</Text>
+          </View>
+        </View>
       </View>
 
       <AddItemBar categories={categories} onAdd={onAdd} disabled={loading} onBrowse={onBrowse} />
@@ -1391,6 +1400,72 @@ function ShoppingRoute({ navigation, route }) {
   );
 }
 
+// Simple tab-bar icons drawn with plain Views -- deliberately NOT an icon
+// font/library (e.g. @expo/vector-icons). Those need to be resolved and
+// bundled by Metro at build time, and this project has already been bitten
+// twice by exactly that class of problem (the SDK 51->54 drift, the
+// missing babel-preset-expo dependency) -- both invisible on Snack and
+// only surfacing as a broken/blank icon (or a failed build) on a real EAS
+// build. A handful of Views has no version to drift and nothing to fail to
+// resolve.
+function TabIcon({ shape, color, size = 22 }) {
+  if (shape === "list") {
+    return (
+      <View style={{ width: size, height: size, justifyContent: "center", gap: 3 }}>
+        <View style={{ height: 2.5, borderRadius: 2, backgroundColor: color, width: "100%" }} />
+        <View style={{ height: 2.5, borderRadius: 2, backgroundColor: color, width: "78%" }} />
+        <View style={{ height: 2.5, borderRadius: 2, backgroundColor: color, width: "55%" }} />
+      </View>
+    );
+  }
+  if (shape === "browse") {
+    return (
+      <View style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
+        <View
+          style={{
+            width: size * 0.62,
+            height: size * 0.62,
+            borderRadius: size * 0.31,
+            borderWidth: 2.2,
+            borderColor: color,
+          }}
+        />
+        <View
+          style={{
+            position: "absolute",
+            width: size * 0.34,
+            height: 2.4,
+            backgroundColor: color,
+            borderRadius: 2,
+            bottom: size * 0.08,
+            right: size * 0.04,
+            transform: [{ rotate: "45deg" }],
+          }}
+        />
+      </View>
+    );
+  }
+  // "compare" -- a little bar chart
+  return (
+    <View
+      style={{
+        width: size,
+        height: size,
+        flexDirection: "row",
+        alignItems: "flex-end",
+        justifyContent: "center",
+        gap: 3,
+      }}
+    >
+      <View style={{ width: size * 0.22, height: size * 0.5, borderRadius: 2, backgroundColor: color }} />
+      <View style={{ width: size * 0.22, height: size * 0.85, borderRadius: 2, backgroundColor: color }} />
+      <View style={{ width: size * 0.22, height: size * 0.34, borderRadius: 2, backgroundColor: color }} />
+    </View>
+  );
+}
+
+const TAB_ICON_SHAPES = { ListTab: "list", Browse: "browse", CompareTab: "compare" };
+
 // The screen that actually renders the three-tab bar. Kept as its own
 // stable, module-level component (not inlined into App()'s return) for the
 // same reason every *Route component above is -- registered as a
@@ -1398,12 +1473,15 @@ function ShoppingRoute({ navigation, route }) {
 function TabsScreen() {
   return (
     <Tab.Navigator
-      screenOptions={{
+      screenOptions={({ route }) => ({
         headerShown: false,
         tabBarActiveTintColor: "#0ca30c",
         tabBarInactiveTintColor: "#898781",
         tabBarStyle: TAB_BAR_STYLE,
-      }}
+        tabBarIcon: ({ color, size }) => (
+          <TabIcon shape={TAB_ICON_SHAPES[route.name]} color={color} size={size} />
+        ),
+      })}
     >
       <Tab.Screen name="ListTab" component={ListRoute} options={{ tabBarLabel: "My list" }} />
       <Tab.Screen name="Browse" component={BrowseRoute} />
@@ -1620,11 +1698,10 @@ export default function App() {
     // and pad itself correctly against the real device safe area. Without
     // a `SafeAreaProvider` ancestor that hook has nothing real to read and
     // falls back to bad defaults -- which is exactly what a tab bar that
-    // looks "half cut off" at the bottom means. The plain `SafeAreaView`
-    // from "react-native" below is unrelated -- it only pads its own
-    // children away from a notch/status bar and doesn't provide this
-    // context, which is why adding React Navigation without also adding
-    // this provider left the bug in place.
+    // looks "half cut off" at the bottom means. `SafeAreaView` right below
+    // is ALSO imported from "react-native-safe-area-context" (see the
+    // import comment above) so it correctly pads the header away from the
+    // status bar on Android too, not just iOS.
     <SafeAreaProvider>
       <SafeAreaView style={styles.safeArea}>
         <StatusBar barStyle="dark-content" />
@@ -1647,6 +1724,11 @@ const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: "#fcfcfb" },
   screen: { flex: 1 },
   header: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 8 },
+  headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
+  headerLeft: { flexShrink: 1 },
+  headerCount: { alignItems: "flex-end", marginLeft: 12 },
+  headerCountNumber: { fontSize: 26, fontWeight: "700", color: "#0b0b0b", lineHeight: 28 },
+  headerCountLabel: { fontSize: 12, color: "#52514e", marginTop: 1 },
   title: { fontSize: 24, fontWeight: "600", color: "#0b0b0b" },
   subtitle: { fontSize: 13, color: "#52514e", marginTop: 2 },
   listLabel: {
@@ -1691,10 +1773,13 @@ const styles = StyleSheet.create({
   },
   browseBtnText: { fontSize: 12.5, fontWeight: "600", color: "#52514e" },
   compareCta: {
+    // Deliberately a neutral color, not the app's green -- the owner wants
+    // to hold off on finalizing colors app-wide until the design overall is
+    // settled, rather than this one button jumping ahead of that decision.
     marginHorizontal: 20,
     marginBottom: 14,
     marginTop: 4,
-    backgroundColor: "#0ca30c",
+    backgroundColor: "#2b2a27",
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: "center",
