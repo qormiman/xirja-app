@@ -5,16 +5,20 @@
  * Six real screens now, on REAL navigation (React Navigation) as of this
  * version -- previously a hand-rolled `screen` string in local state, which
  * worked fine for the first few screens but was starting to strain once
- * Compare -> Store lists -> Shopping mode became a three-deep chain. Now:
- * a bottom tab navigator for the three peer destinations ("My list",
- * "Browse", "Compare"), each of which is its own native-stack navigator so
- * the screens reached BY TAPPING THROUGH one of them -- "Item detail" from
- * "My list"; "Store lists" then "Shopping mode" from "Compare" -- get real
- * push/back navigation (including the hardware back button on Android)
- * instead of a manually-managed id plus a fallback render branch. The tab
- * bar hides itself automatically on those pushed screens (see
- * `getTabBarVisibility` near the bottom), matching how the original
- * clickable prototype's own sub-screens worked.
+ * Compare -> Store lists -> Shopping mode became a three-deep chain. Now: a
+ * root-level stack holds one "Tabs" screen (the actual three-tab bar --
+ * "My list", "Browse", "Compare") plus "Item detail", "Store lists" and
+ * "Shopping mode" as separate screens on that SAME root stack, pushed on
+ * top of "Tabs" rather than nested inside a tab's own stack. That gives
+ * real push/back navigation (including the hardware back button on
+ * Android) and means the tab bar is simply absent on those pushed screens
+ * -- there's no dynamic "hide the tab bar on this route" logic to get
+ * wrong, because the tab bar only exists on the "Tabs" screen at all. (An
+ * earlier version of this file nested the sub-screens inside each tab's
+ * own stack and hid the tab bar by matching the focused nested-route name
+ * -- that had a real bug where Store lists <-> Shopping mode worked but
+ * there was no way back out to the tabs; see the comment above
+ * `TabsScreen` near the bottom for the fix.)
  *
  * Still NOT in this app (comes later): the price-correction workflow, the
  * other 3 designed screens (Trip summary, Settings, Onboarding),
@@ -39,7 +43,7 @@ import {
   View,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { NavigationContainer, getFocusedRouteNameFromRoute } from "@react-navigation/native";
+import { NavigationContainer } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 
@@ -1099,14 +1103,26 @@ function ShoppingScreen({ items, checkedItemIds, onToggleItem, storeId, onSwitch
 // ============================================================================
 //
 // Three real destinations sit on a bottom tab bar: "My list", "Browse",
-// "Compare". Two of them are themselves a small native-stack navigator, so
-// the screens reached BY TAPPING THROUGH them get real push/back behaviour
-// (the hardware back button on Android included) instead of the previous
-// hand-rolled id-plus-"which-screen"-string approach: "My list" pushes
-// "Item detail"; "Compare" pushes "Store lists" then "Shopping mode".
-// `getTabBarVisibility` below hides the tab bar automatically whenever one
-// of those pushed screens is the one currently focused, matching how the
-// original prototype's own sub-screens had no tab bar of their own.
+// "Compare". "Item detail", "Store lists" and "Shopping mode" are NOT nested
+// inside those tabs -- they're screens on one root-level stack that sits
+// ABOVE the whole tab bar (the tab bar itself lives on a single "Tabs"
+// screen, `TabsScreen` below). That's a deliberate fix, not the original
+// design: an earlier version nested a small stack INSIDE the "My list" and
+// "Compare" tabs and hid the tab bar dynamically (by matching the nested
+// stack's currently-focused route name) whenever one of those pushed
+// screens was open. That version had a real bug -- going Store lists <->
+// Shopping mode worked, but there was no reliable way back out to the
+// three main tabs, because the tab bar's visibility depended on correctly
+// re-deriving the focused nested route on every render, which is fragile.
+// Putting these screens on the ROOT stack instead removes that failure
+// mode entirely: the tab bar physically doesn't exist outside the "Tabs"
+// screen, so there's nothing to get stuck in a wrong state -- going back
+// is always just one root-stack `goBack()` away from any of these screens,
+// and it lands you back on whichever tab you left, exactly as it was.
+// `navigation.navigate("StoreLists")` etc. called from inside a tab still
+// works reaching a root-level screen -- React Navigation walks up the
+// navigator tree to find a screen name that isn't in the current
+// navigator, so no extra plumbing is needed at the call sites below.
 //
 // All the app's real state (the list, categories, stores, loading/busy
 // flags, the in-memory checked-off set) lives in `App()`, same as before,
@@ -1122,14 +1138,8 @@ function ShoppingScreen({ items, checkedItemIds, onToggleItem, storeId, onSwitch
 const AppStateContext = createContext(null);
 const useAppState = () => useContext(AppStateContext);
 
+const RootStack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
-const ListStack = createNativeStackNavigator();
-const CompareStack = createNativeStackNavigator();
-
-function getTabBarVisibility(route, hiddenOnRouteNames) {
-  const routeName = getFocusedRouteNameFromRoute(route) ?? route.name;
-  return hiddenOnRouteNames.includes(routeName) ? { display: "none" } : undefined;
-}
 
 const TAB_BAR_STYLE = { backgroundColor: "#fcfcfb", borderTopColor: "#e1e0d9" };
 
@@ -1178,15 +1188,6 @@ function ItemDetailRoute({ navigation, route }) {
 
   if (!item) return null;
   return <ItemDetailScreen item={item} onBack={() => navigation.goBack()} />;
-}
-
-function ListStackScreen() {
-  return (
-    <ListStack.Navigator screenOptions={{ headerShown: false }}>
-      <ListStack.Screen name="List" component={ListRoute} />
-      <ListStack.Screen name="ItemDetail" component={ItemDetailRoute} />
-    </ListStack.Navigator>
-  );
 }
 
 function BrowseRoute() {
@@ -1239,18 +1240,33 @@ function ShoppingRoute({ navigation, route }) {
       onToggleItem={handleToggleChecked}
       storeId={route.params.storeId}
       onSwitchStore={(storeId) => navigation.setParams({ storeId })}
-      onBack={() => navigation.navigate("StoreLists")}
+      // goBack(), not navigate("StoreLists") -- Shopping is always pushed
+      // directly on top of Store lists on the root stack (see the comment
+      // above), so popping one level is both simpler and exactly right,
+      // the same way it is for every other back arrow in this file.
+      onBack={() => navigation.goBack()}
     />
   );
 }
 
-function CompareStackScreen() {
+// The screen that actually renders the three-tab bar. Kept as its own
+// stable, module-level component (not inlined into App()'s return) for the
+// same reason every *Route component above is -- registered as a
+// `RootStack.Screen`'s `component`, not `children`.
+function TabsScreen() {
   return (
-    <CompareStack.Navigator screenOptions={{ headerShown: false }}>
-      <CompareStack.Screen name="Compare" component={CompareRoute} />
-      <CompareStack.Screen name="StoreLists" component={StoreListsRoute} />
-      <CompareStack.Screen name="Shopping" component={ShoppingRoute} />
-    </CompareStack.Navigator>
+    <Tab.Navigator
+      screenOptions={{
+        headerShown: false,
+        tabBarActiveTintColor: "#0ca30c",
+        tabBarInactiveTintColor: "#898781",
+        tabBarStyle: TAB_BAR_STYLE,
+      }}
+    >
+      <Tab.Screen name="ListTab" component={ListRoute} options={{ tabBarLabel: "My list" }} />
+      <Tab.Screen name="Browse" component={BrowseRoute} />
+      <Tab.Screen name="CompareTab" component={CompareRoute} options={{ tabBarLabel: "Compare" }} />
+    </Tab.Navigator>
   );
 }
 
@@ -1401,39 +1417,12 @@ export default function App() {
       <StatusBar barStyle="dark-content" />
       <AppStateContext.Provider value={appState}>
         <NavigationContainer>
-          <Tab.Navigator
-            screenOptions={{
-              headerShown: false,
-              tabBarActiveTintColor: "#0ca30c",
-              tabBarInactiveTintColor: "#898781",
-              tabBarStyle: TAB_BAR_STYLE,
-            }}
-          >
-            <Tab.Screen
-              name="ListTab"
-              component={ListStackScreen}
-              options={({ route }) => ({
-                tabBarLabel: "My list",
-                // Hides the tab bar while "Item detail" (pushed from "My
-                // list") is the screen actually on screen -- the same
-                // no-tab-bar-on-a-sub-screen rule every other pushed
-                // screen in this app follows.
-                tabBarStyle: [TAB_BAR_STYLE, getTabBarVisibility(route, ["ItemDetail"])],
-              })}
-            />
-            <Tab.Screen name="Browse" component={BrowseRoute} />
-            <Tab.Screen
-              name="CompareTab"
-              component={CompareStackScreen}
-              options={({ route }) => ({
-                tabBarLabel: "Compare",
-                tabBarStyle: [
-                  TAB_BAR_STYLE,
-                  getTabBarVisibility(route, ["StoreLists", "Shopping"]),
-                ],
-              })}
-            />
-          </Tab.Navigator>
+          <RootStack.Navigator screenOptions={{ headerShown: false }}>
+            <RootStack.Screen name="Tabs" component={TabsScreen} />
+            <RootStack.Screen name="ItemDetail" component={ItemDetailRoute} />
+            <RootStack.Screen name="StoreLists" component={StoreListsRoute} />
+            <RootStack.Screen name="Shopping" component={ShoppingRoute} />
+          </RootStack.Navigator>
         </NavigationContainer>
       </AppStateContext.Provider>
     </SafeAreaView>
