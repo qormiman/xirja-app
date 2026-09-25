@@ -1593,7 +1593,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
   },
   detailBestPrice: { fontSize: 32, fontWeight: "700", color: "#ffffff", marginTop: 8 },
-  detailBestStore: { fontSize: 13, fontWeight: "500", color: "oklch(0.80 0.16 152)", marginTop: 6 },
+  detailBestStore: { fontSize: 13, fontWeight: "500", color: "#60db89", marginTop: 6 },
 
   detailOfferRow: {
     flexDirection: "row",
