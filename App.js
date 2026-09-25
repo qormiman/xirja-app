@@ -1017,13 +1017,14 @@ function ShoppingScreen({ items, checkedItemIds, onToggleItem, storeId, onSwitch
       </View>
 
       <View style={styles.shoppingProgressWrap}>
-        <View style={styles.compareBarTrack}>
+        <View style={styles.shoppingProgressTrack}>
           <View
             style={[
-              styles.compareBarFill,
-              { width: `${Math.max(4, pct * 100)}%`, backgroundColor: group.color },
+              styles.shoppingProgressFill,
+              { flex: Math.max(pct, 0.04), backgroundColor: group.color },
             ]}
           />
+          {pct < 1 && <View style={{ flex: 1 - pct }} />}
         </View>
       </View>
 
@@ -1663,6 +1664,21 @@ const styles = StyleSheet.create({
   },
 
   shoppingProgressWrap: { paddingHorizontal: 20, marginBottom: 4 },
+  // Built as two flex-weighted children in a row, NOT a percentage
+  // `width` string on a single child -- a percentage width here didn't
+  // reliably reflow as `pct` changed on a screen that stays mounted while
+  // you check items off (as opposed to Compare/Store lists, where the
+  // whole row list re-renders fresh each time). flex-based proportions
+  // recompute every render, which a cached percentage measurement
+  // sometimes doesn't.
+  shoppingProgressTrack: {
+    flexDirection: "row",
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: "#f1f0ec",
+    overflow: "hidden",
+  },
+  shoppingProgressFill: { borderRadius: 5 },
 
   shoppingSwitcherRow: {
     flexDirection: "row",
