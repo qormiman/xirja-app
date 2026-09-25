@@ -125,6 +125,35 @@ async function saveCheckedItemIds(deviceId, checkedItemIds) {
   }
 }
 
+// ---------------------------------------------------------------------
+// "My list"'s own editable label (e.g. "WEEKLY SHOP") -- purely cosmetic,
+// so it's kept local-only (AsyncStorage, keyed per device like the
+// checked-items above) rather than adding a real "named lists" concept to
+// the backend. There's still only one list per device (see
+// DEVICE_ID_STORAGE_KEY above); this just lets that one list have a name
+// on screen instead of always saying the generic "My list".
+// ---------------------------------------------------------------------
+const LIST_LABEL_STORAGE_KEY_PREFIX = "xirja_list_label_";
+const DEFAULT_LIST_LABEL = "WEEKLY SHOP";
+
+async function loadListLabel(deviceId) {
+  try {
+    const raw = await AsyncStorage.getItem(LIST_LABEL_STORAGE_KEY_PREFIX + deviceId);
+    return raw && raw.trim() ? raw : DEFAULT_LIST_LABEL;
+  } catch {
+    return DEFAULT_LIST_LABEL;
+  }
+}
+
+async function saveListLabel(deviceId, label) {
+  try {
+    await AsyncStorage.setItem(LIST_LABEL_STORAGE_KEY_PREFIX + deviceId, label);
+  } catch {
+    // Best-effort -- a failed save here just means the label reverts to
+    // the default next launch, nothing worth interrupting the user over.
+  }
+}
+
 /**
  * Wraps fetch() with a timeout and consistent error shapes -- fetch() has
  * no built-in timeout, and left alone a request that never gets a
@@ -201,7 +230,7 @@ const eur = (n) => "€" + n.toFixed(2);
 // "My list" screen
 // ============================================================================
 
-function AddItemBar({ categories, onAdd, disabled }) {
+function AddItemBar({ categories, onAdd, disabled, onBrowse }) {
   const [query, setQuery] = useState("");
   const inputRef = useRef(null);
 
@@ -235,6 +264,11 @@ function AddItemBar({ categories, onAdd, disabled }) {
             if (suggestions.length > 0) pick(suggestions[0].category);
           }}
         />
+        {onBrowse && (
+          <Pressable onPress={onBrowse} style={styles.browseBtn} hitSlop={8}>
+            <Text style={styles.browseBtnText}>Browse</Text>
+          </Pressable>
+        )}
       </View>
       {suggestions.length > 0 && (
         <View style={styles.suggestBox}>
@@ -259,6 +293,13 @@ function AddItemBar({ categories, onAdd, disabled }) {
 
 function ListRow({ item, onInc, onDec, onRemove, onOpenDetail, busy }) {
   const { cheapest } = item;
+  // Savings: what you'd have paid at this item's priciest listed store,
+  // versus the cheapest one -- only meaningful (and only shown) when the
+  // item is actually priced at more than one store.
+  const savings =
+    cheapest && item.by_store.length > 1
+      ? (Math.max(...item.by_store.map((s) => s.price)) - cheapest.price) * item.quantity
+      : 0;
   return (
     <View style={styles.row}>
       <View
@@ -280,6 +321,7 @@ function ListRow({ item, onInc, onDec, onRemove, onOpenDetail, busy }) {
       </Pressable>
       <View style={styles.priceCol}>
         <Text style={styles.price}>{cheapest ? eur(cheapest.price * item.quantity) : "—"}</Text>
+        {savings > 0.004 && <Text style={styles.savingsText}>save {eur(savings)}</Text>}
         <View style={styles.qtyRow}>
           <Pressable onPress={() => onDec(item)} disabled={busy} style={styles.qtyBtn}>
             <Text style={styles.qtyBtnText}>−</Text>
@@ -297,6 +339,42 @@ function ListRow({ item, onInc, onDec, onRemove, onOpenDetail, busy }) {
   );
 }
 
+function ListLabelEditor({ listLabel, onSetListLabel }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(listLabel);
+
+  useEffect(() => {
+    if (!editing) setDraft(listLabel);
+  }, [listLabel, editing]);
+
+  function commit() {
+    const trimmed = draft.trim();
+    onSetListLabel(trimmed ? trimmed.toUpperCase() : DEFAULT_LIST_LABEL);
+    setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <TextInput
+        value={draft}
+        onChangeText={setDraft}
+        style={styles.listLabelInput}
+        autoFocus
+        autoCapitalize="characters"
+        returnKeyType="done"
+        onSubmitEditing={commit}
+        onBlur={commit}
+        maxLength={30}
+      />
+    );
+  }
+  return (
+    <Pressable onPress={() => setEditing(true)} hitSlop={6}>
+      <Text style={styles.listLabel}>{listLabel} ✎</Text>
+    </Pressable>
+  );
+}
+
 function ListScreen({
   items,
   categories,
@@ -304,28 +382,37 @@ function ListScreen({
   refreshing,
   busyItemId,
   errorMessage,
+  listLabel,
+  onSetListLabel,
   onRefresh,
   onAdd,
   onInc,
   onDec,
   onRemove,
   onOpenDetail,
+  onBrowse,
+  onGoToCompare,
 }) {
   const total = items.reduce(
     (sum, it) => sum + (it.cheapest ? it.cheapest.price * it.quantity : 0),
     0
   );
+  const totalSavings = items.reduce((sum, it) => {
+    if (!it.cheapest || it.by_store.length <= 1) return sum;
+    return sum + (Math.max(...it.by_store.map((s) => s.price)) - it.cheapest.price) * it.quantity;
+  }, 0);
 
   return (
     <View style={styles.screen}>
       <View style={styles.header}>
         <Text style={styles.title}>My list</Text>
+        <ListLabelEditor listLabel={listLabel} onSetListLabel={onSetListLabel} />
         <Text style={styles.subtitle}>
           {items.length} item{items.length === 1 ? "" : "s"} · {eur(total)} at cheapest prices
         </Text>
       </View>
 
-      <AddItemBar categories={categories} onAdd={onAdd} disabled={loading} />
+      <AddItemBar categories={categories} onAdd={onAdd} disabled={loading} onBrowse={onBrowse} />
 
       {errorMessage && (
         <View style={styles.errorBanner}>
@@ -360,6 +447,14 @@ function ListScreen({
             <Text style={styles.emptyText}>Nothing on the list yet -- add something above, or switch to Browse.</Text>
           }
         />
+      )}
+
+      {!loading && items.length > 0 && (
+        <Pressable style={styles.compareCta} onPress={onGoToCompare}>
+          <Text style={styles.compareCtaText}>
+            Find the best prices{totalSavings > 0.004 ? ` — save up to ${eur(totalSavings)}` : ""} →
+          </Text>
+        </Pressable>
       )}
     </View>
   );
@@ -1192,6 +1287,8 @@ function ListRoute({ navigation }) {
     refreshing,
     busyItemId,
     errorMessage,
+    listLabel,
+    onSetListLabel,
     onRefresh,
     handleAdd,
     handleQuantityChange,
@@ -1205,12 +1302,16 @@ function ListRoute({ navigation }) {
       refreshing={refreshing}
       busyItemId={busyItemId}
       errorMessage={errorMessage}
+      listLabel={listLabel}
+      onSetListLabel={onSetListLabel}
       onRefresh={onRefresh}
       onAdd={handleAdd}
       onInc={(it) => handleQuantityChange(it, it.quantity + 1)}
       onDec={(it) => handleQuantityChange(it, it.quantity - 1)}
       onRemove={handleRemove}
       onOpenDetail={(item) => navigation.navigate("ItemDetail", { itemId: item.item_id })}
+      onBrowse={() => navigation.navigate("Browse")}
+      onGoToCompare={() => navigation.navigate("CompareTab")}
     />
   );
 }
@@ -1327,6 +1428,12 @@ export default function App() {
   // below so it can't fire with the initial empty Set and overwrite a real
   // saved one before the restore has actually happened.
   const [checkedItemsHydrated, setCheckedItemsHydrated] = useState(false);
+  const [listLabel, setListLabel] = useState(DEFAULT_LIST_LABEL);
+  // Same hydration-guard pattern as checkedItemsHydrated above, for the
+  // same reason: without it, the save effect would fire once on mount with
+  // the initial default and overwrite a real saved label before the
+  // restore from AsyncStorage has happened.
+  const [listLabelHydrated, setListLabelHydrated] = useState(false);
 
   async function loadEverything(id) {
     // Deliberately NOT Promise.all -- these are two independent pieces of
@@ -1365,6 +1472,9 @@ export default function App() {
       const restoredCheckedItemIds = await loadCheckedItemIds(id);
       setCheckedItemIds(restoredCheckedItemIds);
       setCheckedItemsHydrated(true);
+      const restoredListLabel = await loadListLabel(id);
+      setListLabel(restoredListLabel);
+      setListLabelHydrated(true);
       await loadEverything(id);
       setLoading(false);
     })();
@@ -1400,6 +1510,13 @@ export default function App() {
     if (!deviceId || !checkedItemsHydrated) return;
     saveCheckedItemIds(deviceId, checkedItemIds);
   }, [deviceId, checkedItemsHydrated, checkedItemIds]);
+
+  // Saves the list label on every real change, once hydrated -- mirrors
+  // the checked-items save effect above.
+  useEffect(() => {
+    if (!deviceId || !listLabelHydrated) return;
+    saveListLabel(deviceId, listLabel);
+  }, [deviceId, listLabelHydrated, listLabel]);
 
   async function onRefresh() {
     if (!deviceId) return;
@@ -1487,6 +1604,8 @@ export default function App() {
     busyCategory,
     errorMessage,
     checkedItemIds,
+    listLabel,
+    onSetListLabel: setListLabel,
     onRefresh,
     handleAdd,
     handleQuantityChange,
@@ -1530,6 +1649,25 @@ const styles = StyleSheet.create({
   header: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 8 },
   title: { fontSize: 24, fontWeight: "600", color: "#0b0b0b" },
   subtitle: { fontSize: 13, color: "#52514e", marginTop: 2 },
+  listLabel: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#0ca30c",
+    letterSpacing: 0.6,
+    marginTop: 4,
+  },
+  listLabelInput: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#0ca30c",
+    letterSpacing: 0.6,
+    marginTop: 4,
+    padding: 0,
+    borderBottomWidth: 1,
+    borderBottomColor: "#0ca30c",
+    alignSelf: "flex-start",
+    minWidth: 80,
+  },
 
   addWrap: { paddingHorizontal: 20, paddingBottom: 6 },
   addInputRow: {
@@ -1545,6 +1683,23 @@ const styles = StyleSheet.create({
   },
   addPlus: { fontSize: 16, fontWeight: "600", color: "#0ca30c" },
   addInput: { flex: 1, fontSize: 15, color: "#0b0b0b" },
+  browseBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+    backgroundColor: "#f1f0ec",
+  },
+  browseBtnText: { fontSize: 12.5, fontWeight: "600", color: "#52514e" },
+  compareCta: {
+    marginHorizontal: 20,
+    marginBottom: 14,
+    marginTop: 4,
+    backgroundColor: "#0ca30c",
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: "center",
+  },
+  compareCtaText: { color: "#ffffff", fontSize: 14.5, fontWeight: "600" },
   suggestBox: {
     marginTop: 6,
     backgroundColor: "#ffffff",
@@ -1599,6 +1754,7 @@ const styles = StyleSheet.create({
   itemSubMuted: { marginTop: 4, fontSize: 11.5, color: "#898781" },
   priceCol: { alignItems: "flex-end", marginRight: 8 },
   price: { fontSize: 15, fontWeight: "700", color: "#0b0b0b" },
+  savingsText: { fontSize: 10.5, fontWeight: "600", color: "#0ca30c", marginTop: 1 },
   qtyRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 6 },
   qtyBtn: {
     width: 26,
