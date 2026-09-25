@@ -2,28 +2,28 @@
  * Xirja -- "My list", "Browse", "Compare", "Store lists", "Item detail",
  * and "Shopping mode".
  *
- * Six real screens now. Three of them ("My list", "Browse", "Compare") sit
- * behind a simple tab bar -- still local state choosing which screen to
- * show, not the full React Navigation library (fine for 3 tabs plus a few
- * tap/button-reached sub-screens, won't scale cleanly much further -- a
- * real navigation library is a known next step, see PROGRESS.md). The
- * other three are reached by tapping/tapping-through rather than their own
- * tabs, each one an action taken FROM somewhere rather than an equal
- * destination, matching how the original clickable prototype linked them:
- * tap an item on "My list" -> "Item detail"; tap "Split into N store
- * lists" on Compare -> "Store lists"; tap a store card there -> "Shopping
- * mode" for that stop, with its own store switcher to jump straight to the
- * next unfinished one. Each has its own back arrow and hides the tab bar
- * while open, same as the prototype's own sub-screens did.
+ * Six real screens now, on REAL navigation (React Navigation) as of this
+ * version -- previously a hand-rolled `screen` string in local state, which
+ * worked fine for the first few screens but was starting to strain once
+ * Compare -> Store lists -> Shopping mode became a three-deep chain. Now:
+ * a bottom tab navigator for the three peer destinations ("My list",
+ * "Browse", "Compare"), each of which is its own native-stack navigator so
+ * the screens reached BY TAPPING THROUGH one of them -- "Item detail" from
+ * "My list"; "Store lists" then "Shopping mode" from "Compare" -- get real
+ * push/back navigation (including the hardware back button on Android)
+ * instead of a manually-managed id plus a fallback render branch. The tab
+ * bar hides itself automatically on those pushed screens (see
+ * `getTabBarVisibility` near the bottom), matching how the original
+ * clickable prototype's own sub-screens worked.
  *
  * Still NOT in this app (comes later): the price-correction workflow, the
- * other 3 designed screens (Trip summary, Settings, Onboarding), a real
- * navigation library, persisting Shopping mode's checked-off state past an
- * app reload (currently in-memory only, see ShoppingScreen's comment), and
- * a real login (see DEVICE_ID_STORAGE_KEY below).
+ * other 3 designed screens (Trip summary, Settings, Onboarding),
+ * persisting Shopping mode's checked-off state past an app reload
+ * (currently in-memory only, see ShoppingScreen's comment), and a real
+ * login (see DEVICE_ID_STORAGE_KEY below).
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -39,6 +39,9 @@ import {
   View,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { NavigationContainer, getFocusedRouteNameFromRoute } from "@react-navigation/native";
+import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+import { createNativeStackNavigator } from "@react-navigation/native-stack";
 
 // ---------------------------------------------------------------------
 // Already set to the real, deployed Render API -- shouldn't need to touch
@@ -1092,32 +1095,166 @@ function ShoppingScreen({ items, checkedItemIds, onToggleItem, storeId, onSwitch
 }
 
 // ============================================================================
-// Tab bar + top-level app
+// Navigation + top-level app
 // ============================================================================
+//
+// Three real destinations sit on a bottom tab bar: "My list", "Browse",
+// "Compare". Two of them are themselves a small native-stack navigator, so
+// the screens reached BY TAPPING THROUGH them get real push/back behaviour
+// (the hardware back button on Android included) instead of the previous
+// hand-rolled id-plus-"which-screen"-string approach: "My list" pushes
+// "Item detail"; "Compare" pushes "Store lists" then "Shopping mode".
+// `getTabBarVisibility` below hides the tab bar automatically whenever one
+// of those pushed screens is the one currently focused, matching how the
+// original prototype's own sub-screens had no tab bar of their own.
+//
+// All the app's real state (the list, categories, stores, loading/busy
+// flags, the in-memory checked-off set) lives in `App()`, same as before,
+// and reaches every screen through `AppStateContext` rather than being
+// passed down as navigator props. This is deliberate, not just a style
+// choice: a `Tab.Screen`/`Stack.Screen`'s `component` must be a STABLE
+// function reference, or React Navigation treats it as a brand new screen
+// on every render and remounts it -- which, here, would mean getting
+// kicked back to the top of a stack every time an item's quantity changed
+// mid-navigation. Context lets these route components stay fixed,
+// module-level functions while still always reading the latest state.
 
-function TabBar({ screen, onChange }) {
-  const tabs = [
-    { key: "list", label: "My list" },
-    { key: "browse", label: "Browse" },
-    { key: "compare", label: "Compare" },
-  ];
+const AppStateContext = createContext(null);
+const useAppState = () => useContext(AppStateContext);
+
+const Tab = createBottomTabNavigator();
+const ListStack = createNativeStackNavigator();
+const CompareStack = createNativeStackNavigator();
+
+function getTabBarVisibility(route, hiddenOnRouteNames) {
+  const routeName = getFocusedRouteNameFromRoute(route) ?? route.name;
+  return hiddenOnRouteNames.includes(routeName) ? { display: "none" } : undefined;
+}
+
+const TAB_BAR_STYLE = { backgroundColor: "#fcfcfb", borderTopColor: "#e1e0d9" };
+
+function ListRoute({ navigation }) {
+  const {
+    items,
+    categories,
+    loading,
+    refreshing,
+    busyItemId,
+    errorMessage,
+    onRefresh,
+    handleAdd,
+    handleQuantityChange,
+    handleRemove,
+  } = useAppState();
   return (
-    <View style={styles.tabBar}>
-      {tabs.map((t) => {
-        const active = screen === t.key;
-        return (
-          <Pressable key={t.key} onPress={() => onChange(t.key)} style={styles.tabBtn}>
-            <Text style={[styles.tabBtnText, active && styles.tabBtnTextActive]}>{t.label}</Text>
-            <View style={[styles.tabIndicator, active && styles.tabIndicatorActive]} />
-          </Pressable>
-        );
-      })}
-    </View>
+    <ListScreen
+      items={items}
+      categories={categories}
+      loading={loading}
+      refreshing={refreshing}
+      busyItemId={busyItemId}
+      errorMessage={errorMessage}
+      onRefresh={onRefresh}
+      onAdd={handleAdd}
+      onInc={(it) => handleQuantityChange(it, it.quantity + 1)}
+      onDec={(it) => handleQuantityChange(it, it.quantity - 1)}
+      onRemove={handleRemove}
+      onOpenDetail={(item) => navigation.navigate("ItemDetail", { itemId: item.item_id })}
+    />
+  );
+}
+
+function ItemDetailRoute({ navigation, route }) {
+  const { items } = useAppState();
+  const item = items.find((it) => it.item_id === route.params.itemId);
+
+  useEffect(() => {
+    // Covers removing an item (or a refresh dropping it, e.g. it stopped
+    // being priced anywhere) while its detail screen happens to be open --
+    // rather than showing a detail screen for an item that no longer
+    // exists, just go back to "My list".
+    if (!item) navigation.goBack();
+  }, [item, navigation]);
+
+  if (!item) return null;
+  return <ItemDetailScreen item={item} onBack={() => navigation.goBack()} />;
+}
+
+function ListStackScreen() {
+  return (
+    <ListStack.Navigator screenOptions={{ headerShown: false }}>
+      <ListStack.Screen name="List" component={ListRoute} />
+      <ListStack.Screen name="ItemDetail" component={ItemDetailRoute} />
+    </ListStack.Navigator>
+  );
+}
+
+function BrowseRoute() {
+  const { categories, items, loading, refreshing, onRefresh, handleAdd, busyCategory } = useAppState();
+  return (
+    <BrowseScreen
+      categories={categories}
+      items={items}
+      loading={loading}
+      refreshing={refreshing}
+      onRefresh={onRefresh}
+      onAdd={handleAdd}
+      busyCategory={busyCategory}
+    />
+  );
+}
+
+function CompareRoute({ navigation }) {
+  const { items, stores, loading, refreshing, onRefresh } = useAppState();
+  return (
+    <CompareScreen
+      items={items}
+      stores={stores}
+      loading={loading}
+      refreshing={refreshing}
+      onRefresh={onRefresh}
+      onSplit={() => navigation.navigate("StoreLists")}
+    />
+  );
+}
+
+function StoreListsRoute({ navigation }) {
+  const { items, checkedItemIds } = useAppState();
+  return (
+    <StoreListsScreen
+      items={items}
+      checkedItemIds={checkedItemIds}
+      onBack={() => navigation.goBack()}
+      onOpenShopping={(storeId) => navigation.navigate("Shopping", { storeId })}
+    />
+  );
+}
+
+function ShoppingRoute({ navigation, route }) {
+  const { items, checkedItemIds, handleToggleChecked } = useAppState();
+  return (
+    <ShoppingScreen
+      items={items}
+      checkedItemIds={checkedItemIds}
+      onToggleItem={handleToggleChecked}
+      storeId={route.params.storeId}
+      onSwitchStore={(storeId) => navigation.setParams({ storeId })}
+      onBack={() => navigation.navigate("StoreLists")}
+    />
+  );
+}
+
+function CompareStackScreen() {
+  return (
+    <CompareStack.Navigator screenOptions={{ headerShown: false }}>
+      <CompareStack.Screen name="Compare" component={CompareRoute} />
+      <CompareStack.Screen name="StoreLists" component={StoreListsRoute} />
+      <CompareStack.Screen name="Shopping" component={ShoppingRoute} />
+    </CompareStack.Navigator>
   );
 }
 
 export default function App() {
-  const [screen, setScreen] = useState("list");
   const [deviceId, setDeviceId] = useState(null);
   const [items, setItems] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -1127,14 +1264,7 @@ export default function App() {
   const [busyItemId, setBusyItemId] = useState(null);
   const [busyCategory, setBusyCategory] = useState(null);
   const [errorMessage, setErrorMessage] = useState(null);
-  const [detailItemId, setDetailItemId] = useState(null); // which item's detail screen is open, if any
-  const [shoppingStoreId, setShoppingStoreId] = useState(null); // which store's shopping mode is open, if any
   const [checkedItemIds, setCheckedItemIds] = useState(() => new Set()); // in-memory only, see ShoppingScreen's comment
-
-  // Looked up fresh from `items` each render (not a snapshot taken when the
-  // screen opened) so a quantity change made just before opening detail --
-  // or a price refresh while it's open -- is always reflected, not stale.
-  const detailItem = detailItemId ? items.find((it) => it.item_id === detailItemId) : null;
 
   async function loadEverything(id) {
     // Deliberately NOT Promise.all -- these are two independent pieces of
@@ -1172,17 +1302,6 @@ export default function App() {
       setLoading(false);
     })();
   }, []);
-
-  useEffect(() => {
-    // Covers removing an item (or a refresh dropping it, e.g. it stopped
-    // being priced anywhere) while its detail screen happens to be open --
-    // rather than showing a detail screen for an item that no longer
-    // exists, just fall back to the list.
-    if (detailItemId && !items.some((it) => it.item_id === detailItemId)) {
-      setDetailItemId(null);
-      setScreen("list");
-    }
-  }, [items, detailItemId]);
 
   async function onRefresh() {
     if (!deviceId) return;
@@ -1260,101 +1379,63 @@ export default function App() {
     });
   }
 
+  const appState = {
+    items,
+    categories,
+    stores,
+    loading,
+    refreshing,
+    busyItemId,
+    busyCategory,
+    errorMessage,
+    checkedItemIds,
+    onRefresh,
+    handleAdd,
+    handleQuantityChange,
+    handleRemove,
+    handleToggleChecked,
+  };
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" />
-
-      {screen === "list" ? (
-        <ListScreen
-          items={items}
-          categories={categories}
-          loading={loading}
-          refreshing={refreshing}
-          busyItemId={busyItemId}
-          errorMessage={errorMessage}
-          onRefresh={onRefresh}
-          onAdd={handleAdd}
-          onInc={(it) => handleQuantityChange(it, it.quantity + 1)}
-          onDec={(it) => handleQuantityChange(it, it.quantity - 1)}
-          onRemove={handleRemove}
-          onOpenDetail={(item) => {
-            setDetailItemId(item.item_id);
-            setScreen("detail");
-          }}
-        />
-      ) : screen === "detail" && detailItem ? (
-        <ItemDetailScreen
-          item={detailItem}
-          onBack={() => {
-            setDetailItemId(null);
-            setScreen("list");
-          }}
-        />
-      ) : screen === "browse" ? (
-        <BrowseScreen
-          categories={categories}
-          items={items}
-          loading={loading}
-          refreshing={refreshing}
-          onRefresh={onRefresh}
-          onAdd={handleAdd}
-          busyCategory={busyCategory}
-        />
-      ) : screen === "compare" ? (
-        <CompareScreen
-          items={items}
-          stores={stores}
-          loading={loading}
-          refreshing={refreshing}
-          onRefresh={onRefresh}
-          onSplit={() => setScreen("storelists")}
-        />
-      ) : screen === "storelists" ? (
-        <StoreListsScreen
-          items={items}
-          checkedItemIds={checkedItemIds}
-          onBack={() => setScreen("compare")}
-          onOpenShopping={(storeId) => {
-            setShoppingStoreId(storeId);
-            setScreen("shopping");
-          }}
-        />
-      ) : screen === "shopping" ? (
-        <ShoppingScreen
-          items={items}
-          checkedItemIds={checkedItemIds}
-          onToggleItem={handleToggleChecked}
-          storeId={shoppingStoreId}
-          onSwitchStore={setShoppingStoreId}
-          onBack={() => setScreen("storelists")}
-        />
-      ) : (
-        // Covers "detail" with no matching item left (e.g. it was just
-        // removed) for the one render before the effect above catches up
-        // and sends screen back to "list" -- falls back to My list instead
-        // of momentarily showing the wrong screen.
-        <ListScreen
-          items={items}
-          categories={categories}
-          loading={loading}
-          refreshing={refreshing}
-          busyItemId={busyItemId}
-          errorMessage={errorMessage}
-          onRefresh={onRefresh}
-          onAdd={handleAdd}
-          onInc={(it) => handleQuantityChange(it, it.quantity + 1)}
-          onDec={(it) => handleQuantityChange(it, it.quantity - 1)}
-          onRemove={handleRemove}
-          onOpenDetail={(item) => {
-            setDetailItemId(item.item_id);
-            setScreen("detail");
-          }}
-        />
-      )}
-
-      {screen !== "storelists" && screen !== "detail" && screen !== "shopping" && (
-        <TabBar screen={screen} onChange={setScreen} />
-      )}
+      <AppStateContext.Provider value={appState}>
+        <NavigationContainer>
+          <Tab.Navigator
+            screenOptions={{
+              headerShown: false,
+              tabBarActiveTintColor: "#0ca30c",
+              tabBarInactiveTintColor: "#898781",
+              tabBarStyle: TAB_BAR_STYLE,
+            }}
+          >
+            <Tab.Screen
+              name="ListTab"
+              component={ListStackScreen}
+              options={({ route }) => ({
+                tabBarLabel: "My list",
+                // Hides the tab bar while "Item detail" (pushed from "My
+                // list") is the screen actually on screen -- the same
+                // no-tab-bar-on-a-sub-screen rule every other pushed
+                // screen in this app follows.
+                tabBarStyle: [TAB_BAR_STYLE, getTabBarVisibility(route, ["ItemDetail"])],
+              })}
+            />
+            <Tab.Screen name="Browse" component={BrowseRoute} />
+            <Tab.Screen
+              name="CompareTab"
+              component={CompareStackScreen}
+              options={({ route }) => ({
+                tabBarLabel: "Compare",
+                tabBarStyle: [
+                  TAB_BAR_STYLE,
+                  getTabBarVisibility(route, ["StoreLists", "Shopping"]),
+                ],
+              })}
+            />
+          </Tab.Navigator>
+        </NavigationContainer>
+      </AppStateContext.Provider>
     </SafeAreaView>
   );
 }
@@ -1475,18 +1556,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#898781",
   },
-
-  tabBar: {
-    flexDirection: "row",
-    borderTopWidth: 1,
-    borderTopColor: "#e1e0d9",
-    backgroundColor: "#fcfcfb",
-  },
-  tabBtn: { flex: 1, alignItems: "center", paddingTop: 10, paddingBottom: 12 },
-  tabBtnText: { fontSize: 13, fontWeight: "500", color: "#898781" },
-  tabBtnTextActive: { color: "#0b0b0b", fontWeight: "600" },
-  tabIndicator: { height: 3, width: 28, borderRadius: 2, marginTop: 8, backgroundColor: "transparent" },
-  tabIndicatorActive: { backgroundColor: "#0ca30c" },
 
   compareSavingCard: {
     backgroundColor: "#0b0b0b",
