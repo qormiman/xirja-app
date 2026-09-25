@@ -43,6 +43,7 @@ import {
   View,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 import { NavigationContainer } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
@@ -1413,19 +1414,32 @@ export default function App() {
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="dark-content" />
-      <AppStateContext.Provider value={appState}>
-        <NavigationContainer>
-          <RootStack.Navigator screenOptions={{ headerShown: false }}>
-            <RootStack.Screen name="Tabs" component={TabsScreen} />
-            <RootStack.Screen name="ItemDetail" component={ItemDetailRoute} />
-            <RootStack.Screen name="StoreLists" component={StoreListsRoute} />
-            <RootStack.Screen name="Shopping" component={ShoppingRoute} />
-          </RootStack.Navigator>
-        </NavigationContainer>
-      </AppStateContext.Provider>
-    </SafeAreaView>
+    // SafeAreaProvider has to be the outermost wrapper here -- React
+    // Navigation's bottom tab bar reads its own bottom inset from
+    // `react-native-safe-area-context` (via `useSafeAreaInsets`) to size
+    // and pad itself correctly against the real device safe area. Without
+    // a `SafeAreaProvider` ancestor that hook has nothing real to read and
+    // falls back to bad defaults -- which is exactly what a tab bar that
+    // looks "half cut off" at the bottom means. The plain `SafeAreaView`
+    // from "react-native" below is unrelated -- it only pads its own
+    // children away from a notch/status bar and doesn't provide this
+    // context, which is why adding React Navigation without also adding
+    // this provider left the bug in place.
+    <SafeAreaProvider>
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar barStyle="dark-content" />
+        <AppStateContext.Provider value={appState}>
+          <NavigationContainer>
+            <RootStack.Navigator screenOptions={{ headerShown: false }}>
+              <RootStack.Screen name="Tabs" component={TabsScreen} />
+              <RootStack.Screen name="ItemDetail" component={ItemDetailRoute} />
+              <RootStack.Screen name="StoreLists" component={StoreListsRoute} />
+              <RootStack.Screen name="Shopping" component={ShoppingRoute} />
+            </RootStack.Navigator>
+          </NavigationContainer>
+        </AppStateContext.Provider>
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 
