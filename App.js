@@ -20,11 +20,14 @@
  * there was no way back out to the tabs; see the comment above
  * `TabsScreen` near the bottom for the fix.)
  *
+ * Shopping mode's checked-off state now survives closing the app mid-trip
+ * too (new, as of this version) -- persisted to AsyncStorage the same way
+ * the device id itself is; see `loadCheckedItemIds`/`saveCheckedItemIds`
+ * near DEVICE_ID_STORAGE_KEY below, and the comment on ShoppingScreen.
+ *
  * Still NOT in this app (comes later): the price-correction workflow, the
- * other 3 designed screens (Trip summary, Settings, Onboarding),
- * persisting Shopping mode's checked-off state past an app reload
- * (currently in-memory only, see ShoppingScreen's comment), and a real
- * login (see DEVICE_ID_STORAGE_KEY below).
+ * other 3 designed screens (Trip summary, Settings, Onboarding), and a
+ * real login (see DEVICE_ID_STORAGE_KEY below).
  */
 
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
@@ -83,6 +86,43 @@ async function getDeviceId() {
   const created = makeDeviceId();
   await AsyncStorage.setItem(DEVICE_ID_STORAGE_KEY, created);
   return created;
+}
+
+// ---------------------------------------------------------------------
+// Shopping mode's checked-off state -- which items you've already put in
+// the trolley -- used to live only in React state, so closing the app (or
+// it getting killed in the background) mid-trip lost every checkmark.
+// Persisted here the same way the device id itself is: AsyncStorage, keyed
+// per device so it doesn't collide with anyone else testing against the
+// same API. Deliberately keyed by DEVICE id, not by list id -- there's
+// only ever one list per device right now (no real accounts yet, see
+// DEVICE_ID_STORAGE_KEY above), so the two would be equivalent, but the
+// device id is the one guaranteed to exist before the list has loaded.
+// ---------------------------------------------------------------------
+const CHECKED_ITEMS_STORAGE_KEY_PREFIX = "xirja_checked_item_ids_";
+
+async function loadCheckedItemIds(deviceId) {
+  try {
+    const raw = await AsyncStorage.getItem(CHECKED_ITEMS_STORAGE_KEY_PREFIX + deviceId);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return new Set(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    // Corrupt or unreadable storage -- start with an empty checklist rather
+    // than crash the app over a lost set of checkmarks.
+    return new Set();
+  }
+}
+
+async function saveCheckedItemIds(deviceId, checkedItemIds) {
+  try {
+    await AsyncStorage.setItem(
+      CHECKED_ITEMS_STORAGE_KEY_PREFIX + deviceId,
+      JSON.stringify(Array.from(checkedItemIds))
+    );
+  } catch {
+    // Best-effort -- a failed save here shouldn't interrupt shopping.
+  }
 }
 
 /**
@@ -940,15 +980,15 @@ function StoreListsScreen({ items, checkedItemIds, onBack, onOpenShopping }) {
 // Reached by tapping a store card on Store lists -- a real checklist for
 // that one stop: tick items off as they land in the trolley, watch the
 // running total update, and jump straight to the next unfinished store
-// without detouring back through Store lists first. Checked-off state
-// lives only in memory for now (see `checkedItemIds` in App()) -- it
-// resets if the app reloads mid-trip. That's a real, known gap (see
-// PROGRESS.md), not an oversight: persisting it (AsyncStorage, keyed by
-// list_id) is a small enough follow-up that it wasn't worth blocking this
-// screen on. Deliberately no barcode scanning and no "fix this price" /
-// "swap store" actions here, unlike the original prototype -- those need
-// a camera and the price-correction workflow respectively, neither of
-// which exist yet (see PROGRESS.md's "Not started" section).
+// without detouring back through Store lists first. Checked-off state now
+// survives closing the app mid-trip (see `checkedItemIds` in App(), and
+// `loadCheckedItemIds`/`saveCheckedItemIds` near DEVICE_ID_STORAGE_KEY) --
+// it used to live only in memory, which was a real, known gap; persisting
+// it was the second of three agreed steps toward a permanent personal-use
+// install (see PROGRESS.md). Deliberately no barcode scanning and no "fix
+// this price" / "swap store" actions here, unlike the original prototype
+// -- those need a camera and the price-correction workflow respectively,
+// neither of which exist yet (see PROGRESS.md's "Not started" section).
 
 function ShoppingRow({ item, checked, onToggle }) {
   return (
@@ -1281,7 +1321,12 @@ export default function App() {
   const [busyItemId, setBusyItemId] = useState(null);
   const [busyCategory, setBusyCategory] = useState(null);
   const [errorMessage, setErrorMessage] = useState(null);
-  const [checkedItemIds, setCheckedItemIds] = useState(() => new Set()); // in-memory only, see ShoppingScreen's comment
+  const [checkedItemIds, setCheckedItemIds] = useState(() => new Set());
+  // True once the persisted checked-items set has been read back from
+  // AsyncStorage (or confirmed there was none). Guards the save effect
+  // below so it can't fire with the initial empty Set and overwrite a real
+  // saved one before the restore has actually happened.
+  const [checkedItemsHydrated, setCheckedItemsHydrated] = useState(false);
 
   async function loadEverything(id) {
     // Deliberately NOT Promise.all -- these are two independent pieces of
@@ -1315,10 +1360,46 @@ export default function App() {
     (async () => {
       const id = await getDeviceId();
       setDeviceId(id);
+      // Restore before marking hydrated -- see checkedItemsHydrated's
+      // comment above for why the save effect below must not run first.
+      const restoredCheckedItemIds = await loadCheckedItemIds(id);
+      setCheckedItemIds(restoredCheckedItemIds);
+      setCheckedItemsHydrated(true);
       await loadEverything(id);
       setLoading(false);
     })();
   }, []);
+
+  // Prunes checked-off ids for items that no longer exist (removed from
+  // the list, or dropped by a refresh) -- otherwise a stale id lingers in
+  // storage forever, harmlessly but pointlessly. Runs whenever the list
+  // itself changes; a no-op (returns the same Set) when nothing needs
+  // pruning, so it doesn't cause an extra save on every ordinary refresh.
+  useEffect(() => {
+    if (!checkedItemsHydrated) return;
+    setCheckedItemIds((prev) => {
+      const validIds = new Set(items.map((it) => it.item_id));
+      let changed = false;
+      const next = new Set();
+      prev.forEach((id) => {
+        if (validIds.has(id)) {
+          next.add(id);
+        } else {
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [items, checkedItemsHydrated]);
+
+  // Saves the checked-off set on every real change, once hydrated. Cheap
+  // enough (a handful of ids, JSON-stringified) not to worry about
+  // debouncing -- ticking a checkbox is nowhere near fast enough for this
+  // to be a meaningful volume of writes.
+  useEffect(() => {
+    if (!deviceId || !checkedItemsHydrated) return;
+    saveCheckedItemIds(deviceId, checkedItemIds);
+  }, [deviceId, checkedItemsHydrated, checkedItemIds]);
 
   async function onRefresh() {
     if (!deviceId) return;
