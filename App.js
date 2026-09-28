@@ -661,6 +661,65 @@ function ItemDetailScreen({ item, onBack }) {
 // again just adds another one -- same "bump the quantity" behaviour as
 // typing the same category twice in "My list".
 
+// A department is a coarse grouping OVER the ~150+ fine-grained shopping
+// categories (see category_taxonomy.py in xirja-backend for how those are
+// built) -- purely a Browse-screen display/filter convenience, not a real
+// data-model concept, so it's kept here as a client-only keyword classifier
+// rather than a backend change. Same spirit as that file's own
+// name-based fallback classification: a reasonable first draft built by
+// looking at real category names, not a perfectly reviewed taxonomy.
+// Order matters -- checked top to bottom, first match wins (e.g. "Fish &
+// Other Animals" must hit Meat & fish before anything else gets a chance).
+const DEPARTMENTS = ["All", "Fruit & veg", "Bakery", "Dairy & chilled", "Meat & fish", "Drinks", "Pantry", "Other"];
+
+function classifyDepartment(categoryName) {
+  const s = categoryName.toLowerCase();
+  const has = (...words) => words.some((w) => s.includes(w));
+  if (has("milk", "cheese", "yoghurt", "yogurt", "dairy", "butter", "cream", "egg")) return "Dairy & chilled";
+  if (has("meat", "chicken", "beef", "pork", "ham", "sausage", "fish", "seafood", "salmon", "tuna", "poultry")) {
+    return "Meat & fish";
+  }
+  if (has("fruit", "veg", "salad", "potato", "onion", "tomato")) return "Fruit & veg";
+  if (has("bread", "bakery", "cake", "pastry", "bun", "croissant")) return "Bakery";
+  if (has("juice", "water", "beer", "wine", "cider", "spirit", "whisky", "carbonated", "soft drink", "beverage")) {
+    return "Drinks";
+  }
+  if (
+    has(
+      "pasta", "rice", "cereal", "sauce", "condiment", "canned", "nut", "snack", "chocolate",
+      "coffee", "tea", "spice", "herb", "oil", "sugar", "flour", "biscuit", "cracker", "sweet",
+      "food", "pizza", "dip", "couscous"
+    )
+  ) {
+    return "Pantry";
+  }
+  return "Other";
+}
+
+function DepartmentChips({ selected, onSelect }) {
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      style={styles.deptChipsRow}
+      contentContainerStyle={styles.deptChipsContent}
+    >
+      {DEPARTMENTS.map((dept) => {
+        const active = dept === selected;
+        return (
+          <Pressable
+            key={dept}
+            onPress={() => onSelect(dept)}
+            style={[styles.deptChip, active && styles.deptChipActive]}
+          >
+            <Text style={[styles.deptChipText, active && styles.deptChipTextActive]}>{dept}</Text>
+          </Pressable>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
 function BrowseRow({ entry, inCartQuantity, onAdd, busy }) {
   const added = inCartQuantity > 0;
   return (
@@ -668,6 +727,7 @@ function BrowseRow({ entry, inCartQuantity, onAdd, busy }) {
       <View style={styles.rowMain}>
         <Text style={styles.itemName}>{entry.category}</Text>
         <Text style={styles.itemSubMuted}>
+          {entry.min_price != null ? `from ${eur(entry.min_price)} · ` : ""}
           {entry.store_count} store{entry.store_count === 1 ? "" : "s"} carry this right now
         </Text>
       </View>
@@ -686,6 +746,7 @@ function BrowseRow({ entry, inCartQuantity, onAdd, busy }) {
 
 function BrowseScreen({ categories, items, loading, refreshing, onRefresh, onAdd, busyCategory }) {
   const [query, setQuery] = useState("");
+  const [department, setDepartment] = useState("All");
 
   const quantityByCategory = useMemo(() => {
     const map = {};
@@ -697,9 +758,12 @@ function BrowseScreen({ categories, items, loading, refreshing, onRefresh, onAdd
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return categories;
-    return categories.filter((c) => c.category.toLowerCase().includes(q));
-  }, [query, categories]);
+    return categories.filter((c) => {
+      if (q && !c.category.toLowerCase().includes(q)) return false;
+      if (department !== "All" && classifyDepartment(c.category) !== department) return false;
+      return true;
+    });
+  }, [query, department, categories]);
 
   return (
     <View style={styles.screen}>
@@ -721,6 +785,8 @@ function BrowseScreen({ categories, items, loading, refreshing, onRefresh, onAdd
           />
         </View>
       </View>
+
+      <DepartmentChips selected={department} onSelect={setDepartment} />
 
       {loading ? (
         <View style={styles.centerFill}>
@@ -1853,6 +1919,20 @@ const styles = StyleSheet.create({
   qtyValue: { fontSize: 13, fontWeight: "600", color: "#0b0b0b", minWidth: 14, textAlign: "center" },
   removeBtn: { padding: 8 },
   removeBtnText: { fontSize: 14, color: "#898781" },
+
+  deptChipsRow: { flexGrow: 0, marginBottom: 10 },
+  deptChipsContent: { paddingHorizontal: 20, gap: 8 },
+  deptChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#e1e0d9",
+  },
+  deptChipActive: { backgroundColor: "#0b0b0b", borderColor: "#0b0b0b" },
+  deptChipText: { fontSize: 12.5, fontWeight: "600", color: "#52514e" },
+  deptChipTextActive: { color: "#ffffff" },
 
   browseRow: {
     flexDirection: "row",
