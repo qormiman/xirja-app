@@ -697,13 +697,17 @@ function classifyDepartment(categoryName) {
 }
 
 function DepartmentChips({ selected, onSelect }) {
+  // A plain wrapping View, deliberately NOT a horizontal ScrollView --
+  // that was tried first and collapsed to a sliver on Android (see
+  // PROGRESS.md's "Real discrepancy #8"), then, even after giving it an
+  // explicit height, still rendered visibly clipped/cut off on a real
+  // device. Rather than keep chasing a ScrollView-specific Android sizing
+  // quirk blind (this sandbox has no way to actually render and screenshot
+  // RN layout to confirm a fix), wrapping to a second line is a small,
+  // guaranteed-safe trade for only 8 short chips -- no ScrollView, no
+  // cross-axis sizing to get wrong, works identically on every platform.
   return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      style={styles.deptChipsRow}
-      contentContainerStyle={styles.deptChipsContent}
-    >
+    <View style={styles.deptChipsWrap}>
       {DEPARTMENTS.map((dept) => {
         const active = dept === selected;
         return (
@@ -716,7 +720,7 @@ function DepartmentChips({ selected, onSelect }) {
           </Pressable>
         );
       })}
-    </ScrollView>
+    </View>
   );
 }
 
@@ -1920,14 +1924,13 @@ const styles = StyleSheet.create({
   removeBtn: { padding: 8 },
   removeBtnText: { fontSize: 14, color: "#898781" },
 
-  // Explicit height (not just intrinsic content sizing) -- a horizontal
-  // ScrollView left to size itself from its children can collapse to a
-  // sliver on Android, since its row-direction content container defaults
-  // to stretching children to a not-yet-determined cross-axis size. Fixed
-  // height plus `alignItems: "center"` on the content below avoids that
-  // collapse entirely instead of fighting it.
-  deptChipsRow: { flexGrow: 0, height: 44, marginBottom: 10 },
-  deptChipsContent: { paddingHorizontal: 20, gap: 8, alignItems: "center" },
+  deptChipsWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    paddingHorizontal: 20,
+    gap: 8,
+    marginBottom: 10,
+  },
   deptChip: {
     paddingHorizontal: 14,
     paddingVertical: 8,
