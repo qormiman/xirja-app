@@ -1383,11 +1383,27 @@ function computeStoreLists(items) {
   return { groups, maxTotal, unpriced };
 }
 
+// `outlet.locality` isn't backfilled for every real outlet row (the column
+// exists in schema.sql, but not every crawled branch has had it set) -- so
+// this needs a real fallback, not just an empty gap on the card. Falling
+// back to the outlet's full `name` used to show something like "Greens -
+// Mriehel" right under a card already titled "Greens Supermarket" --
+// redundant AND needlessly long (long enough to get truncated). Stripping
+// the leading "<store name> - " (or "<store name> ") gets back to just
+// "Mriehel", the same shape locality itself would have been.
+function shortenOutletName(outletName, storeName) {
+  if (!outletName) return null;
+  if (!storeName) return outletName;
+  const prefix = new RegExp("^" + storeName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s*-?\\s*", "i");
+  const stripped = outletName.replace(prefix, "").trim();
+  return stripped || outletName;
+}
+
 function StoreListCard({ group, maxTotal, checkedCount, onOpen }) {
   const preview = group.items.map((it) => it.category).join(", ");
   const allChecked = checkedCount >= group.items.length;
   const localityLine = group.primaryOutlet
-    ? (group.primaryOutlet.locality || group.primaryOutlet.name) +
+    ? (group.primaryOutlet.locality || shortenOutletName(group.primaryOutlet.name, group.name)) +
       (group.multipleOutlets ? " + other branches" : "")
     : null;
   return (
@@ -1399,9 +1415,12 @@ function StoreListCard({ group, maxTotal, checkedCount, onOpen }) {
         <View style={styles.storeListMain}>
           <Text style={styles.storeListName}>{group.name}</Text>
           {localityLine && (
-            <Text style={styles.storeListLocality} numberOfLines={1}>
-              {localityLine}
-            </Text>
+            // No numberOfLines cap -- this is exactly the class of bug
+            // fixed in Item detail (Real discrepancy #9 in PROGRESS.md):
+            // truncating a locality/branch line can silently hide the "+
+            // other branches" flag, which is the one piece of this line
+            // that matters most. Wrapping to two lines costs nothing here.
+            <Text style={styles.storeListLocality}>{localityLine}</Text>
           )}
           <Text style={styles.storeListMeta}>
             {allChecked
