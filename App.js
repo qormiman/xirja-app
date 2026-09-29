@@ -486,6 +486,38 @@ function weekLabel(isoDate) {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+// How recently a store's price was actually observed by a crawler --
+// `observed_at` straight from the same `price_observation` row every price
+// on this screen already comes from (see fetch_cheapest_for_category in
+// api/main.py), just not previously shown anywhere in the app. Deliberately
+// coarse (today/yesterday/"Nd ago"/a short date) rather than an exact
+// timestamp -- a shopper cares whether a price is stale, not the precise
+// minute it was crawled.
+function formatObservedAt(isoString) {
+  if (!isoString) return null;
+  const observed = new Date(isoString);
+  if (isNaN(observed.getTime())) return null;
+  const now = new Date();
+  const hh = String(observed.getHours()).padStart(2, "0");
+  const mm = String(observed.getMinutes()).padStart(2, "0");
+  if (observed.toDateString() === now.toDateString()) return `today ${hh}:${mm}`;
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (observed.toDateString() === yesterday.toDateString()) return `yesterday ${hh}:${mm}`;
+  const diffDays = Math.round((now - observed) / (1000 * 60 * 60 * 24));
+  if (diffDays > 0 && diffDays < 7) return `${diffDays}d ago`;
+  return observed.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+// "€1.20/l" style unit price -- price_per_unit / price_per_unit_measure
+// are null whenever a crawler couldn't work out a per-unit figure for that
+// listing (see PER_UNIT_DIVISORS / PHYSICAL_UNITS in the crawlers), so this
+// stays null rather than showing a misleading "/undefined".
+function formatUnitPrice(offer) {
+  if (!offer || offer.price_per_unit == null || !offer.price_per_unit_measure) return null;
+  return `${eur(offer.price_per_unit)}/${offer.price_per_unit_measure}`;
+}
+
 function computeTrend(weeks) {
   if (weeks.length < 2) return null;
   const first = weeks[0].price;
@@ -584,6 +616,11 @@ function ItemDetailScreen({ item, onBack }) {
           <Text style={styles.subtitle}>
             {item.by_store.length} store{item.by_store.length === 1 ? "" : "s"} carry this right now
           </Text>
+          {item.cheapest && (item.cheapest.product_name || formatUnitPrice(item.cheapest)) && (
+            <Text style={styles.subtitleMuted} numberOfLines={1}>
+              {[item.cheapest.product_name, formatUnitPrice(item.cheapest)].filter(Boolean).join(" · ")}
+            </Text>
+          )}
         </View>
       </View>
 
@@ -593,6 +630,11 @@ function ItemDetailScreen({ item, onBack }) {
             <Text style={styles.detailBestLabel}>Cheapest right now</Text>
             <Text style={styles.detailBestPrice}>{eur(item.cheapest.price)}</Text>
             <Text style={styles.detailBestStore}>{item.cheapest.store_name}</Text>
+            {formatObservedAt(item.cheapest.observed_at) && (
+              <Text style={styles.detailBestFreshness}>
+                updated {formatObservedAt(item.cheapest.observed_at)}
+              </Text>
+            )}
           </View>
         ) : (
           <View style={styles.detailBestCard}>
@@ -601,15 +643,29 @@ function ItemDetailScreen({ item, onBack }) {
         )}
 
         <Text style={styles.sectionLabel}>All stores</Text>
-        {item.by_store.map((offer) => (
-          <View key={offer.store_id} style={styles.detailOfferRow}>
-            <View style={[styles.detailOfferChip, { backgroundColor: offer.color }]}>
-              <Text style={styles.detailOfferChipText}>{offer.short_code}</Text>
+        {item.by_store.map((offer) => {
+          const unitPrice = formatUnitPrice(offer);
+          const freshness = formatObservedAt(offer.observed_at);
+          const sourceLine = [offer.product_name, unitPrice, freshness ? `updated ${freshness}` : null]
+            .filter(Boolean)
+            .join(" · ");
+          return (
+            <View key={offer.store_id} style={styles.detailOfferRow}>
+              <View style={styles.detailOfferTop}>
+                <View style={[styles.detailOfferChip, { backgroundColor: offer.color }]}>
+                  <Text style={styles.detailOfferChipText}>{offer.short_code}</Text>
+                </View>
+                <Text style={styles.detailOfferName}>{offer.store_name}</Text>
+                <Text style={styles.detailOfferPrice}>{eur(offer.price)}</Text>
+              </View>
+              {sourceLine ? (
+                <Text style={styles.detailOfferSource} numberOfLines={1}>
+                  {sourceLine}
+                </Text>
+              ) : null}
             </View>
-            <Text style={styles.detailOfferName}>{offer.store_name}</Text>
-            <Text style={styles.detailOfferPrice}>{eur(offer.price)}</Text>
-          </View>
-        ))}
+          );
+        })}
 
         <Text style={styles.sectionLabel}>8-week price history</Text>
         {historyError ? (
@@ -2034,6 +2090,7 @@ const styles = StyleSheet.create({
   headerCountLabel: { fontSize: 12, color: "#52514e", marginTop: 1 },
   title: { fontSize: 24, fontWeight: "600", color: "#0b0b0b" },
   subtitle: { fontSize: 13, color: "#52514e", marginTop: 2 },
+  subtitleMuted: { fontSize: 11.5, color: "#898781", marginTop: 2 },
   listLabel: {
     fontSize: 11,
     fontWeight: "700",
@@ -2334,10 +2391,9 @@ const styles = StyleSheet.create({
   },
   detailBestPrice: { fontSize: 32, fontWeight: "700", color: "#ffffff", marginTop: 8 },
   detailBestStore: { fontSize: 13, fontWeight: "500", color: "#60db89", marginTop: 6 },
+  detailBestFreshness: { fontSize: 11, color: "rgba(255,255,255,0.55)", marginTop: 4 },
 
   detailOfferRow: {
-    flexDirection: "row",
-    alignItems: "center",
     backgroundColor: "#ffffff",
     borderWidth: 1,
     borderColor: "#e1e0d9",
@@ -2346,6 +2402,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     marginBottom: 8,
   },
+  detailOfferTop: { flexDirection: "row", alignItems: "center" },
   detailOfferChip: {
     width: 30,
     height: 30,
@@ -2357,6 +2414,7 @@ const styles = StyleSheet.create({
   detailOfferChipText: { fontSize: 10, fontWeight: "700", color: "#ffffff" },
   detailOfferName: { flex: 1, fontSize: 14, fontWeight: "500", color: "#0b0b0b" },
   detailOfferPrice: { fontSize: 15, fontWeight: "700", color: "#0b0b0b" },
+  detailOfferSource: { fontSize: 11, color: "#898781", marginTop: 6, marginLeft: 41 },
 
   historyCard: {
     backgroundColor: "#ffffff",
