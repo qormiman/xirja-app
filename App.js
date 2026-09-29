@@ -38,6 +38,7 @@ import {
   Pressable,
   RefreshControl,
   ScrollView,
+  SectionList,
   StatusBar,
   StyleSheet,
   Text,
@@ -45,6 +46,19 @@ import {
   View,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+// Draws Shopping mode's circular progress ring (Task 6). A NEW native
+// dependency -- unlike the plain-View icons/bars used everywhere else in
+// this file (deliberately, to dodge exactly this kind of risk -- see the
+// TabIcon comment near the bottom of the file), a true smoothly-curved ring
+// genuinely needs SVG; React Native has no way to draw an arc with plain
+// Views/CSS. This means: after pulling this change, run
+// `npx expo install react-native-svg` in the project (Codespaces, same as
+// before) BEFORE the next `eas build` -- that command resolves the exact
+// version this Expo SDK expects, which is safer than trusting a
+// hand-typed version number in package.json. A version is also pinned in
+// package.json as a starting point, but let `expo install` correct it if
+// it's out of date.
+import Svg, { Circle } from "react-native-svg";
 // `SafeAreaView` from "react-native-safe-area-context" (NOT the "react-native"
 // one used previously) -- the plain "react-native" `SafeAreaView` is an
 // iOS-only no-op: on Android it's just a plain `View` and reserves no space
@@ -760,6 +774,24 @@ function classifyDepartment(categoryName) {
     return "Pantry";
   }
   return "Other";
+}
+
+// Groups a flat list of shopping-list items into department sections for
+// Shopping mode (Task 6), reusing the exact same classifier Browse's
+// department chips use -- one taxonomy for the whole app, not two that can
+// drift apart. Sections come back sorted alphabetically by department name
+// (e.g. "Bakery" before "Dairy & chilled"); items keep their original
+// order within their own section.
+function groupItemsByDepartment(items) {
+  const buckets = new Map();
+  for (const it of items) {
+    const dept = classifyDepartment(it.category);
+    if (!buckets.has(dept)) buckets.set(dept, []);
+    buckets.get(dept).push(it);
+  }
+  return [...buckets.keys()]
+    .sort((a, b) => a.localeCompare(b))
+    .map((dept) => ({ title: dept, data: buckets.get(dept) }));
 }
 
 function DepartmentChips({ selected, onSelect }) {
@@ -1528,6 +1560,51 @@ function StoreListsScreen({ items, checkedItemIds, onBack, onOpenShopping }) {
 // this price" / "swap store" actions here, unlike the original prototype
 // -- those need a camera and the price-correction workflow respectively,
 // neither of which exist yet (see PROGRESS.md's "Not started" section).
+//
+// Task 6: the item list is grouped into department sections (same
+// classifier as Browse's chips -- see `groupItemsByDepartment` /
+// `classifyDepartment` above), and the old linear progress bar in the
+// header was replaced with a circular ring (`CircularProgress`, right
+// below) showing "checked/total" in the middle.
+
+// Replaces the old thin linear progress bar (Task 6) -- a circular ring
+// next to the store name in the header, filled clockwise from the top.
+// `pct` is 0..1; `label` is the short text drawn in the middle (e.g.
+// "6/9"). Deliberately capped so a 0% ring still shows a sliver (a fully
+// empty ring with rounded caps can look like a rendering glitch rather
+// than "0 done") and a 100% ring still reads as a ring rather than a
+// solid disc.
+function CircularProgress({ pct, size = 54, strokeWidth = 6, color = "#0ca30c", trackColor = "#e7e6e0", label }) {
+  const radius = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const clamped = Math.min(0.996, Math.max(0.004, pct));
+  const dashOffset = circumference * (1 - clamped);
+  return (
+    <View style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
+      <Svg width={size} height={size} style={{ position: "absolute" }}>
+        <Circle cx={size / 2} cy={size / 2} r={radius} stroke={trackColor} strokeWidth={strokeWidth} fill="none" />
+        <Circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          stroke={color}
+          strokeWidth={strokeWidth}
+          fill="none"
+          strokeDasharray={`${circumference}, ${circumference}`}
+          strokeDashoffset={dashOffset}
+          strokeLinecap="round"
+          rotation="-90"
+          origin={`${size / 2}, ${size / 2}`}
+        />
+      </Svg>
+      {label != null && (
+        <Text style={styles.shoppingRingLabel} numberOfLines={1}>
+          {label}
+        </Text>
+      )}
+    </View>
+  );
+}
 
 function ShoppingRow({ item, checked, onToggle }) {
   return (
@@ -1554,6 +1631,12 @@ function ShoppingRow({ item, checked, onToggle }) {
 function ShoppingScreen({ items, checkedItemIds, onToggleItem, storeId, onSwitchStore, onBack }) {
   const { groups } = useMemo(() => computeStoreLists(items), [items]);
   const group = groups.find((g) => g.storeId === storeId);
+  // Department sections for this stop's list (Task 6) -- recomputed
+  // whenever the group's own items change, same memoization pattern as
+  // everywhere else in this file. Safe to call unconditionally here
+  // (before the "no group" early return below) since hooks must run in
+  // the same order on every render.
+  const sections = useMemo(() => (group ? groupItemsByDepartment(group.items) : []), [group]);
 
   if (!group) {
     // The store this shopping trip was for no longer has any items
@@ -1601,18 +1684,7 @@ function ShoppingScreen({ items, checkedItemIds, onToggleItem, storeId, onSwitch
             {checkedCount} of {totalCount} checked · {eur(spent)} of {eur(group.total)}
           </Text>
         </View>
-      </View>
-
-      <View style={styles.shoppingProgressWrap}>
-        <View style={styles.shoppingProgressTrack}>
-          <View
-            style={[
-              styles.shoppingProgressFill,
-              { flex: Math.max(pct, 0.04), backgroundColor: group.color },
-            ]}
-          />
-          {pct < 1 && <View style={{ flex: 1 - pct }} />}
-        </View>
+        <CircularProgress pct={pct} color={group.color} label={`${checkedCount}/${totalCount}`} />
       </View>
 
       {groups.length > 1 && (
@@ -1645,8 +1717,8 @@ function ShoppingScreen({ items, checkedItemIds, onToggleItem, storeId, onSwitch
         </View>
       )}
 
-      <FlatList
-        data={group.items}
+      <SectionList
+        sections={sections}
         keyExtractor={(it) => it.item_id}
         contentContainerStyle={styles.listContent}
         renderItem={({ item }) => (
@@ -1656,7 +1728,11 @@ function ShoppingScreen({ items, checkedItemIds, onToggleItem, storeId, onSwitch
             onToggle={() => onToggleItem(item.item_id)}
           />
         )}
+        renderSectionHeader={({ section }) => (
+          <Text style={styles.shoppingSectionHeader}>{section.title}</Text>
+        )}
         ItemSeparatorComponent={() => <View style={styles.separator} />}
+        stickySectionHeadersEnabled={false}
       />
 
       <View style={styles.bottomBarWrap}>
@@ -2547,22 +2623,23 @@ const styles = StyleSheet.create({
     borderTopColor: "#f1f0ec",
   },
 
-  shoppingProgressWrap: { paddingHorizontal: 20, marginBottom: 4 },
-  // Built as two flex-weighted children in a row, NOT a percentage
-  // `width` string on a single child -- a percentage width here didn't
-  // reliably reflow as `pct` changed on a screen that stays mounted while
-  // you check items off (as opposed to Compare/Store lists, where the
-  // whole row list re-renders fresh each time). flex-based proportions
-  // recompute every render, which a cached percentage measurement
-  // sometimes doesn't.
-  shoppingProgressTrack: {
-    flexDirection: "row",
-    height: 9,
-    borderRadius: 5,
-    backgroundColor: "#f1f0ec",
-    overflow: "hidden",
+  // The "checked/total" text drawn in the middle of the header's circular
+  // progress ring (Task 6, replaced the old linear bar that used to live
+  // here -- see `CircularProgress`).
+  shoppingRingLabel: { fontSize: 12.5, fontWeight: "700", color: "#0b0b0b" },
+
+  // Department section headers inside Shopping mode's list (Task 6),
+  // reusing the visual weight of a plain small caption rather than
+  // inventing a new heavier style -- these are wayfinding, not content.
+  shoppingSectionHeader: {
+    fontSize: 12.5,
+    fontWeight: "700",
+    color: "#898781",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+    marginTop: 14,
+    marginBottom: 6,
   },
-  shoppingProgressFill: { borderRadius: 5 },
 
   shoppingSwitcherRow: {
     flexDirection: "row",
