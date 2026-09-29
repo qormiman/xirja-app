@@ -878,6 +878,127 @@ function computeStoreRanking(items, stores) {
     .sort((a, b) => a.comparable - b.comparable);
 }
 
+// The three strategies Compare can show, all built from the exact same
+// per-item data (`item.by_store` / `item.cheapest`) -- just a different
+// rule for "which store does this item come from":
+//   "one"  -- everything from ONE store, its own gaps filled in at
+//             whichever OTHER store is cheapest (computeStoreRanking above).
+//   "each" -- every item from its own individually cheapest store,
+//             regardless of how many stops that means (the same total
+//             "Split into N store lists" already implies).
+//   "two"  -- the best PAIR of stores, each item bought from whichever of
+//             the two is cheaper (or, failing that, a third "elsewhere"
+//             stop) -- new for this pass.
+
+function resolveItemForStorePair(item, storeA, storeB) {
+  const offerA = storeA ? item.by_store.find((o) => o.store_id === storeA.store_id) : null;
+  const offerB = storeB ? item.by_store.find((o) => o.store_id === storeB.store_id) : null;
+  if (offerA && offerB) return offerA.price <= offerB.price ? offerA : offerB;
+  if (offerA) return offerA;
+  if (offerB) return offerB;
+  // Neither of the two chosen stores carries it right now -- falls back to
+  // wherever it's cheapest anywhere, same "elsewhere" idea as the one-store
+  // ranking above, just flagged so the breakdown can call it a third stop.
+  return item.cheapest || null;
+}
+
+function computeCheapestEachTotal(items) {
+  let total = 0;
+  let unpricedCount = 0;
+  items.forEach((item) => {
+    if (item.cheapest) total += item.cheapest.price * item.quantity;
+    else unpricedCount += 1;
+  });
+  return { total, unpricedCount };
+}
+
+// Brute-forces every pair of real stores -- fine even for a much bigger
+// store list than this app's real 3 chains, since it's O(pairs x items)
+// and both stay small; no need for anything cleverer.
+function computeBestTwoStores(items, stores) {
+  if (stores.length < 2) return null;
+  let best = null;
+  for (let i = 0; i < stores.length; i++) {
+    for (let j = i + 1; j < stores.length; j++) {
+      const storeA = stores[i];
+      const storeB = stores[j];
+      let total = 0;
+      let elsewhereCount = 0;
+      items.forEach((item) => {
+        const resolved = resolveItemForStorePair(item, storeA, storeB);
+        if (resolved) total += resolved.price * item.quantity;
+      });
+      const candidate = { storeA, storeB, total, elsewhereCount };
+      if (!best || candidate.total < best.total) best = candidate;
+    }
+  }
+  return best;
+}
+
+// Builds the "which store does each item come from" rows the expandable
+// breakdown shows, for any of the three strategies -- `resolve(item)`
+// returns the winning `by_store` entry (or item.cheapest as an "elsewhere"
+// fallback), or null if nothing prices it anywhere right now.
+function buildBreakdownRows(items, resolve) {
+  return items.map((item) => ({ item, offer: resolve(item) }));
+}
+
+function CompareBreakdown({ rows }) {
+  return (
+    <View style={styles.compareBreakdown}>
+      {rows.map(({ item, offer }) => (
+        <View key={item.item_id} style={styles.compareBreakdownRow}>
+          <View
+            style={[
+              styles.compareBreakdownDot,
+              { backgroundColor: offer ? offer.color : "rgba(11,11,11,0.14)" },
+            ]}
+          />
+          <Text style={styles.compareBreakdownName} numberOfLines={1}>
+            {item.category}
+          </Text>
+          {offer ? (
+            <Text style={styles.compareBreakdownStore} numberOfLines={1}>
+              {offer.store_name}
+            </Text>
+          ) : (
+            <Text style={styles.compareBreakdownStoreMuted}>not priced</Text>
+          )}
+          <Text style={styles.compareBreakdownPrice}>
+            {offer ? eur(offer.price * item.quantity) : "—"}
+          </Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function StrategyToggle({ strategy, onChange }) {
+  const options = [
+    { key: "each", label: "Cheapest each" },
+    { key: "two", label: "2 stores" },
+    { key: "one", label: "One store" },
+  ];
+  return (
+    <View style={styles.strategyToggle}>
+      {options.map((opt) => {
+        const active = opt.key === strategy;
+        return (
+          <Pressable
+            key={opt.key}
+            onPress={() => onChange(opt.key)}
+            style={[styles.strategyOption, active && styles.strategyOptionActive]}
+          >
+            <Text style={[styles.strategyOptionText, active && styles.strategyOptionTextActive]}>
+              {opt.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
 function CompareScreen({ items, stores, loading, refreshing, onRefresh, onSplit }) {
   if (loading) {
     return (
@@ -933,69 +1054,181 @@ function CompareScreen({ items, stores, loading, refreshing, onRefresh, onSplit 
     );
   }
 
+  return (
+    <CompareStrategies
+      items={items}
+      stores={stores}
+      refreshing={refreshing}
+      onRefresh={onRefresh}
+      onSplit={onSplit}
+    />
+  );
+}
+
+// Split out as its own component (rather than inlined straight into
+// CompareScreen) purely so its strategy/expansion state -- new for this
+// pass -- doesn't have to be threaded through the loading/empty-state
+// early returns above, which never need it.
+function CompareStrategies({ items, stores, refreshing, onRefresh, onSplit }) {
+  const [strategy, setStrategy] = useState("one");
+  const [expandedStoreId, setExpandedStoreId] = useState(null);
+  const [showBreakdown, setShowBreakdown] = useState(false);
+
   const ranked = computeStoreRanking(items, stores);
   const maxComparable = ranked.length ? ranked[ranked.length - 1].comparable : 1;
   const cheapest = ranked[0];
   const mostExpensive = ranked[ranked.length - 1];
   const wouldSave = mostExpensive.comparable - cheapest.comparable;
   const splitStopCount = computeStoreLists(items).groups.length;
+  const eachResult = computeCheapestEachTotal(items);
+  const twoResult = computeBestTwoStores(items, stores);
+
+  let subtitle = `${items.length} item${items.length === 1 ? "" : "s"} · `;
+  if (strategy === "each") subtitle += "cheapest store per item";
+  else if (strategy === "two") subtitle += "best pair of stores";
+  else subtitle += "whole basket, per store";
 
   return (
     <View style={styles.screen}>
       <View style={styles.header}>
         <Text style={styles.title}>Compare</Text>
-        <Text style={styles.subtitle}>
-          {items.length} item{items.length === 1 ? "" : "s"} · whole basket, per store
-        </Text>
+        <Text style={styles.subtitle}>{subtitle}</Text>
       </View>
 
-      <FlatList
-        data={ranked}
-        keyExtractor={(store) => store.store_id}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        contentContainerStyle={styles.listContent}
-        ListHeaderComponent={
-          wouldSave > 0 ? (
-            <View style={styles.compareSavingCard}>
-              <Text style={styles.compareSavingLabel}>Cheapest single store vs. most expensive</Text>
-              <Text style={styles.compareSavingValue}>{eur(wouldSave)}</Text>
-              <Text style={styles.compareSavingNote}>
-                {cheapest.name} beats {mostExpensive.name} by this much for the exact same list.
-              </Text>
-            </View>
-          ) : null
-        }
-        renderItem={({ item: store, index }) => (
-          <View style={styles.compareRow}>
-            <View style={styles.compareRowTop}>
-              <Text style={[styles.compareStoreName, index === 0 && styles.compareStoreNameBest]}>
-                {index === 0 ? "★ " : ""}
-                {store.name}
-              </Text>
-              <Text style={[styles.compareTotal, index === 0 && styles.compareStoreNameBest]}>
-                {eur(store.comparable)}
-              </Text>
-            </View>
-            <View style={styles.compareBarTrack}>
-              <View
-                style={[
-                  styles.compareBarFill,
-                  {
-                    width: `${Math.max(6, (store.comparable / maxComparable) * 100)}%`,
-                    backgroundColor: index === 0 ? store.color : "rgba(11,11,11,0.18)",
-                  },
-                ]}
-              />
-            </View>
-            {store.missingCount > 0 && (
-              <Text style={styles.compareNote}>
-                {eur(store.total)} here + {eur(store.elsewhere)} for{" "}
-                {store.missingCount === 1 ? store.missingNames[0] : `${store.missingCount} items`} elsewhere
-              </Text>
-            )}
+      <StrategyToggle strategy={strategy} onChange={setStrategy} />
+
+      {strategy === "one" && (
+        <FlatList
+          data={ranked}
+          keyExtractor={(store) => store.store_id}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+          contentContainerStyle={styles.listContent}
+          ListHeaderComponent={
+            wouldSave > 0 ? (
+              <View style={styles.compareSavingCard}>
+                <Text style={styles.compareSavingLabel}>Cheapest single store vs. most expensive</Text>
+                <Text style={styles.compareSavingValue}>{eur(wouldSave)}</Text>
+                <Text style={styles.compareSavingNote}>
+                  {cheapest.name} beats {mostExpensive.name} by this much for the exact same list.
+                </Text>
+              </View>
+            ) : null
+          }
+          renderItem={({ item: store, index }) => {
+            const expanded = expandedStoreId === store.store_id;
+            return (
+              <Pressable
+                style={styles.compareRow}
+                onPress={() => setExpandedStoreId(expanded ? null : store.store_id)}
+              >
+                <View style={styles.compareRowTop}>
+                  <Text style={[styles.compareStoreName, index === 0 && styles.compareStoreNameBest]}>
+                    {index === 0 ? "★ " : ""}
+                    {store.name}
+                  </Text>
+                  <Text style={[styles.compareTotal, index === 0 && styles.compareStoreNameBest]}>
+                    {eur(store.comparable)}
+                  </Text>
+                </View>
+                <View style={styles.compareBarTrack}>
+                  <View
+                    style={[
+                      styles.compareBarFill,
+                      {
+                        width: `${Math.max(6, (store.comparable / maxComparable) * 100)}%`,
+                        backgroundColor: index === 0 ? store.color : "rgba(11,11,11,0.18)",
+                      },
+                    ]}
+                  />
+                </View>
+                {store.missingCount > 0 && (
+                  <Text style={styles.compareNote}>
+                    {eur(store.total)} here + {eur(store.elsewhere)} for{" "}
+                    {store.missingCount === 1 ? store.missingNames[0] : `${store.missingCount} items`} elsewhere
+                  </Text>
+                )}
+                <Text style={styles.compareExpandHint}>{expanded ? "Hide" : "Show"} item-by-item ▾</Text>
+                {expanded && (
+                  <CompareBreakdown
+                    rows={buildBreakdownRows(
+                      items,
+                      (item) => item.by_store.find((o) => o.store_id === store.store_id) || item.cheapest
+                    )}
+                  />
+                )}
+              </Pressable>
+            );
+          }}
+        />
+      )}
+
+      {strategy === "each" && (
+        <ScrollView
+          contentContainerStyle={styles.listContent}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        >
+          <View style={styles.compareSavingCard}>
+            <Text style={styles.compareSavingLabel}>Every item from its own cheapest store</Text>
+            <Text style={styles.compareSavingValue}>{eur(eachResult.total)}</Text>
+            <Text style={styles.compareSavingNote}>
+              {cheapest.comparable > eachResult.total
+                ? `${eur(cheapest.comparable - eachResult.total)} cheaper than the best single store, but means buying across ${splitStopCount} stores.`
+                : `Same as the best single store here -- everything's already cheapest at ${cheapest.name}.`}
+              {eachResult.unpricedCount > 0
+                ? ` ${eachResult.unpricedCount} item${eachResult.unpricedCount === 1 ? "" : "s"} not priced anywhere right now.`
+                : ""}
+            </Text>
           </View>
-        )}
-      />
+          <Pressable onPress={() => setShowBreakdown((v) => !v)} style={styles.compareBreakdownToggle}>
+            <Text style={styles.compareBreakdownToggleText}>
+              {showBreakdown ? "Hide" : "Show"} item-by-item breakdown ▾
+            </Text>
+          </Pressable>
+          {showBreakdown && (
+            <CompareBreakdown rows={buildBreakdownRows(items, (item) => item.cheapest)} />
+          )}
+        </ScrollView>
+      )}
+
+      {strategy === "two" && (
+        <ScrollView
+          contentContainerStyle={styles.listContent}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        >
+          {twoResult ? (
+            <>
+              <View style={styles.compareSavingCard}>
+                <Text style={styles.compareSavingLabel}>
+                  {twoResult.storeA.name} + {twoResult.storeB.name}
+                </Text>
+                <Text style={styles.compareSavingValue}>{eur(twoResult.total)}</Text>
+                <Text style={styles.compareSavingNote}>
+                  {cheapest.comparable > twoResult.total
+                    ? `${eur(cheapest.comparable - twoResult.total)} cheaper than the best single store, for one extra stop.`
+                    : `Same as the best single store -- a second stop wouldn't save anything right now.`}
+                  {twoResult.total > eachResult.total
+                    ? ` ${eur(twoResult.total - eachResult.total)} more than buying every item at its own cheapest store.`
+                    : ""}
+                </Text>
+              </View>
+              <Pressable onPress={() => setShowBreakdown((v) => !v)} style={styles.compareBreakdownToggle}>
+                <Text style={styles.compareBreakdownToggleText}>
+                  {showBreakdown ? "Hide" : "Show"} item-by-item breakdown ▾
+                </Text>
+              </Pressable>
+              {showBreakdown && (
+                <CompareBreakdown
+                  rows={buildBreakdownRows(items, (item) =>
+                    resolveItemForStorePair(item, twoResult.storeA, twoResult.storeB)
+                  )}
+                />
+              )}
+            </>
+          ) : (
+            <Text style={styles.emptyText}>Need at least 2 real stores to compare a pair.</Text>
+          )}
+        </ScrollView>
+      )}
 
       {splitStopCount > 1 && (
         <View style={styles.bottomBarWrap}>
@@ -1980,6 +2213,30 @@ const styles = StyleSheet.create({
   compareSavingLabel: { fontSize: 11, color: "rgba(255,255,255,0.6)", textTransform: "uppercase", letterSpacing: 0.6 },
   compareSavingValue: { fontSize: 30, fontWeight: "700", color: "#ffffff", marginTop: 6 },
   compareSavingNote: { fontSize: 12.5, color: "rgba(255,255,255,0.7)", marginTop: 8, lineHeight: 17 },
+
+  strategyToggle: {
+    flexDirection: "row",
+    marginHorizontal: 20,
+    marginBottom: 12,
+    backgroundColor: "#f1f0ec",
+    borderRadius: 12,
+    padding: 3,
+  },
+  strategyOption: { flex: 1, paddingVertical: 8, borderRadius: 9, alignItems: "center" },
+  strategyOptionActive: { backgroundColor: "#ffffff" },
+  strategyOptionText: { fontSize: 12, fontWeight: "600", color: "#898781" },
+  strategyOptionTextActive: { color: "#0b0b0b" },
+
+  compareExpandHint: { fontSize: 11, fontWeight: "600", color: "#898781", marginTop: 8 },
+  compareBreakdownToggle: { paddingVertical: 4, marginBottom: 4 },
+  compareBreakdownToggleText: { fontSize: 12.5, fontWeight: "600", color: "#0b0b0b" },
+  compareBreakdown: { marginTop: 10, gap: 8 },
+  compareBreakdownRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  compareBreakdownDot: { width: 8, height: 8, borderRadius: 4 },
+  compareBreakdownName: { flex: 1, minWidth: 0, fontSize: 12.5, color: "#0b0b0b" },
+  compareBreakdownStore: { fontSize: 11.5, color: "#52514e", maxWidth: 110 },
+  compareBreakdownStoreMuted: { fontSize: 11.5, color: "#898781", fontStyle: "italic" },
+  compareBreakdownPrice: { fontSize: 12.5, fontWeight: "600", color: "#0b0b0b", minWidth: 54, textAlign: "right" },
 
   bottomBarWrap: {
     paddingHorizontal: 20,
