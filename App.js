@@ -1347,13 +1347,38 @@ function computeStoreLists(items) {
         color: store.color,
         items: [],
         total: 0,
+        // A store's cheapest price PER CATEGORY is resolved independently
+        // category by category (see fetch_cheapest_for_category in
+        // api/main.py) -- so "Greens" here can genuinely mean milk from its
+        // Swieqi branch and bread from its Mosta branch, two different real
+        // outlets, if that's honestly where each one was cheapest. Rather
+        // than pretend a single "the" outlet, tally every outlet actually
+        // hit and show whichever one covers the most of this stop's items
+        // as the primary locality, flagging it when the stop truly does
+        // span more than one branch.
+        outletTally: {},
       };
     }
-    byStore[store.store_id].items.push({ ...item, lineTotal });
-    byStore[store.store_id].total += lineTotal;
+    const group = byStore[store.store_id];
+    group.items.push({ ...item, lineTotal });
+    group.total += lineTotal;
+    const outletKey = store.outlet_id || store.outlet_name || "unknown";
+    if (!group.outletTally[outletKey]) {
+      group.outletTally[outletKey] = {
+        name: store.outlet_name,
+        locality: store.outlet_locality,
+        count: 0,
+      };
+    }
+    group.outletTally[outletKey].count += 1;
   });
 
-  const groups = Object.values(byStore).sort((a, b) => b.total - a.total);
+  const groups = Object.values(byStore)
+    .map((group) => {
+      const outlets = Object.values(group.outletTally).sort((a, b) => b.count - a.count);
+      return { ...group, primaryOutlet: outlets[0] || null, multipleOutlets: outlets.length > 1 };
+    })
+    .sort((a, b) => b.total - a.total);
   const maxTotal = groups.reduce((m, g) => Math.max(m, g.total), 0);
   return { groups, maxTotal, unpriced };
 }
@@ -1361,6 +1386,10 @@ function computeStoreLists(items) {
 function StoreListCard({ group, maxTotal, checkedCount, onOpen }) {
   const preview = group.items.map((it) => it.category).join(", ");
   const allChecked = checkedCount >= group.items.length;
+  const localityLine = group.primaryOutlet
+    ? (group.primaryOutlet.locality || group.primaryOutlet.name) +
+      (group.multipleOutlets ? " + other branches" : "")
+    : null;
   return (
     <Pressable style={styles.storeListCard} onPress={onOpen}>
       <View style={styles.storeListTop}>
@@ -1369,6 +1398,11 @@ function StoreListCard({ group, maxTotal, checkedCount, onOpen }) {
         </View>
         <View style={styles.storeListMain}>
           <Text style={styles.storeListName}>{group.name}</Text>
+          {localityLine && (
+            <Text style={styles.storeListLocality} numberOfLines={1}>
+              {localityLine}
+            </Text>
+          )}
           <Text style={styles.storeListMeta}>
             {allChecked
               ? "All done ✓"
@@ -1390,6 +1424,19 @@ function StoreListCard({ group, maxTotal, checkedCount, onOpen }) {
           ]}
         />
       </View>
+      {checkedCount > 0 && (
+        <View style={styles.storeListProgressTrack}>
+          <View
+            style={[
+              styles.storeListProgressFill,
+              {
+                width: `${Math.max(6, (checkedCount / group.items.length) * 100)}%`,
+                backgroundColor: allChecked ? "#0ca30c" : group.color,
+              },
+            ]}
+          />
+        </View>
+      )}
       <Text style={styles.storeListPreview} numberOfLines={2}>
         {preview}
       </Text>
@@ -2364,8 +2411,17 @@ const styles = StyleSheet.create({
   storeListChipText: { fontSize: 12, fontWeight: "700", color: "#ffffff" },
   storeListMain: { flex: 1, minWidth: 0 },
   storeListName: { fontSize: 16, fontWeight: "600", color: "#0b0b0b" },
+  storeListLocality: { fontSize: 11.5, color: "#52514e", marginTop: 2 },
   storeListMeta: { fontSize: 11.5, color: "#898781", marginTop: 3 },
   storeListTotal: { fontSize: 16, fontWeight: "700", color: "#0b0b0b" },
+  storeListProgressTrack: {
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: "#f1f0ec",
+    overflow: "hidden",
+    marginTop: 6,
+  },
+  storeListProgressFill: { height: "100%", borderRadius: 3 },
   storeListPreview: { fontSize: 12, color: "#52514e", marginTop: 9, lineHeight: 17 },
   storeListOpenHint: { fontSize: 11.5, fontWeight: "600", color: "#0ca30c", marginTop: 10 },
   storeListFootnote: {
