@@ -616,11 +616,14 @@ function ItemDetailScreen({ item, onBack }) {
           <Text style={styles.subtitle}>
             {item.by_store.length} store{item.by_store.length === 1 ? "" : "s"} carry this right now
           </Text>
-          {item.cheapest && (item.cheapest.product_name || formatUnitPrice(item.cheapest)) && (
+          {item.cheapest && item.cheapest.product_name ? (
             <Text style={styles.subtitleMuted} numberOfLines={1}>
-              {[item.cheapest.product_name, formatUnitPrice(item.cheapest)].filter(Boolean).join(" · ")}
+              {item.cheapest.product_name}
             </Text>
-          )}
+          ) : null}
+          {item.cheapest && formatUnitPrice(item.cheapest) ? (
+            <Text style={styles.subtitleMuted}>{formatUnitPrice(item.cheapest)}</Text>
+          ) : null}
         </View>
       </View>
 
@@ -646,7 +649,13 @@ function ItemDetailScreen({ item, onBack }) {
         {item.by_store.map((offer) => {
           const unitPrice = formatUnitPrice(offer);
           const freshness = formatObservedAt(offer.observed_at);
-          const sourceLine = [offer.product_name, unitPrice, freshness ? `updated ${freshness}` : null]
+          // Two separate lines, not one joined string -- a joined line with
+          // a real product name (which can run long) was pushing the unit
+          // price / freshness clean off the end and truncating invisibly
+          // (no visual cue it was cut short, just silently missing info).
+          // The product name is the one piece long enough to actually need
+          // truncating; unit price + freshness together are always short.
+          const metaLine = [unitPrice, freshness ? `updated ${freshness}` : null]
             .filter(Boolean)
             .join(" · ");
           return (
@@ -658,11 +667,12 @@ function ItemDetailScreen({ item, onBack }) {
                 <Text style={styles.detailOfferName}>{offer.store_name}</Text>
                 <Text style={styles.detailOfferPrice}>{eur(offer.price)}</Text>
               </View>
-              {sourceLine ? (
+              {offer.product_name ? (
                 <Text style={styles.detailOfferSource} numberOfLines={1}>
-                  {sourceLine}
+                  {offer.product_name}
                 </Text>
               ) : null}
+              {metaLine ? <Text style={styles.detailOfferMeta}>{metaLine}</Text> : null}
             </View>
           );
         })}
@@ -2415,6 +2425,2554 @@ const styles = StyleSheet.create({
   detailOfferName: { flex: 1, fontSize: 14, fontWeight: "500", color: "#0b0b0b" },
   detailOfferPrice: { fontSize: 15, fontWeight: "700", color: "#0b0b0b" },
   detailOfferSource: { fontSize: 11, color: "#898781", marginTop: 6, marginLeft: 41 },
+  detailOfferMeta: { fontSize: 11, color: "#898781", marginTop: 2, marginLeft: 41 },
+
+  historyCard: {
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#e1e0d9",
+    borderRadius: 16,
+    padding: 16,
+  },
+  historyChipsRow: { flexDirection: "row", gap: 7, marginBottom: 16, flexWrap: "wrap" },
+  historyChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 10,
+    borderWidth: 1.5,
+  },
+  historyChipText: { fontSize: 11.5, fontWeight: "700", color: "#0b0b0b" },
+  historyChipTextActive: { color: "#ffffff" },
+
+  historyBarsRow: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    justifyContent: "space-between",
+    height: 150,
+  },
+  historyBarCol: { flex: 1, alignItems: "center", height: "100%", justifyContent: "flex-end" },
+  historyBarPrice: { fontSize: 9.5, color: "#898781", marginBottom: 4 },
+  historyBarTrack: {
+    width: 16,
+    flex: 1,
+    justifyContent: "flex-end",
+    backgroundColor: "#f1f0ec",
+    borderRadius: 4,
+    overflow: "hidden",
+  },
+  historyBarFill: { width: "100%", backgroundColor: "rgba(11,11,11,0.28)", borderRadius: 4 },
+  historyBarFillLast: { backgroundColor: "#0ca30c" },
+  historyBarLabel: { fontSize: 9, color: "#898781", marginTop: 6 },
+  historyTrend: {
+    fontSize: 12,
+    color: "#52514e",
+    marginTop: 14,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#f1f0ec",
+  },
+
+  shoppingProgressWrap: { paddingHorizontal: 20, marginBottom: 4 },
+  // Built as two flex-weighted children in a row, NOT a percentage
+  // `width` string on a single child -- a percentage width here didn't
+  // reliably reflow as `pct` changed on a screen that stays mounted while
+  // you check items off (as opposed to Compare/Store lists, where the
+  // whole row list re-renders fresh each time). flex-based proportions
+  // recompute every render, which a cached percentage measurement
+  // sometimes doesn't.
+  shoppingProgressTrack: {
+    flexDirection: "row",
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: "#f1f0ec",
+    overflow: "hidden",
+  },
+  shoppingProgressFill: { borderRadius: 5 },
+
+  shoppingSwitcherRow: {
+    flexDirection: "row",
+    gap: 7,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    flexWrap: "wrap",
+  },
+  shoppingSwitcherChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 10,
+    borderWidth: 1.5,
+  },
+  shoppingSwitcherChipText: { fontSize: 11.5, fontWeight: "700", color: "#0b0b0b" },
+  shoppingSwitcherChipTextActive: { color: "#ffffff" },
+
+  shoppingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#e1e0d9",
+    borderRadius: 14,
+    paddingVertical: 13,
+    paddingHorizontal: 14,
+  },
+  shoppingRowChecked: { backgroundColor: "#f6f5f1", borderColor: "#e1e0d9" },
+  shoppingCheckbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: "#c9c7bf",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 13,
+  },
+  shoppingCheckboxChecked: { backgroundColor: "#0ca30c", borderColor: "#0ca30c" },
+  shoppingCheckMark: { fontSize: 13, fontWeight: "700", color: "#ffffff" },
+  shoppingTextChecked: { color: "#a8a69f", textDecorationLine: "line-through" },
+
+  compareRow: {
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#e1e0d9",
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 9,
+  },
+  compareRowTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "baseline" },
+  compareStoreName: { fontSize: 14, fontWeight: "500", color: "#52514e" },
+  compareStoreNameBest: { color: "#0b0b0b", fontWeight: "700" },
+  compareTotal: { fontSize: 15, fontWeight: "600", color: "#52514e" },
+  compareBarTrack: { height: 9, borderRadius: 5, backgroundColor: "#f1f0ec", overflow: "hidden", marginTop: 8 },
+  compareBarFill: { height: "100%", borderRadius: 5 },
+  compareNote: { fontSize: 11, color: "#898781", marginTop: 7 },
+});/**
+ * Xirja -- "My list", "Browse", "Compare", "Store lists", "Item detail",
+ * and "Shopping mode".
+ *
+ * Six real screens now, on REAL navigation (React Navigation) as of this
+ * version -- previously a hand-rolled `screen` string in local state, which
+ * worked fine for the first few screens but was starting to strain once
+ * Compare -> Store lists -> Shopping mode became a three-deep chain. Now: a
+ * root-level stack holds one "Tabs" screen (the actual three-tab bar --
+ * "My list", "Browse", "Compare") plus "Item detail", "Store lists" and
+ * "Shopping mode" as separate screens on that SAME root stack, pushed on
+ * top of "Tabs" rather than nested inside a tab's own stack. That gives
+ * real push/back navigation (including the hardware back button on
+ * Android) and means the tab bar is simply absent on those pushed screens
+ * -- there's no dynamic "hide the tab bar on this route" logic to get
+ * wrong, because the tab bar only exists on the "Tabs" screen at all. (An
+ * earlier version of this file nested the sub-screens inside each tab's
+ * own stack and hid the tab bar by matching the focused nested-route name
+ * -- that had a real bug where Store lists <-> Shopping mode worked but
+ * there was no way back out to the tabs; see the comment above
+ * `TabsScreen` near the bottom for the fix.)
+ *
+ * Shopping mode's checked-off state now survives closing the app mid-trip
+ * too (new, as of this version) -- persisted to AsyncStorage the same way
+ * the device id itself is; see `loadCheckedItemIds`/`saveCheckedItemIds`
+ * near DEVICE_ID_STORAGE_KEY below, and the comment on ShoppingScreen.
+ *
+ * Still NOT in this app (comes later): the price-correction workflow, the
+ * other 3 designed screens (Trip summary, Settings, Onboarding), and a
+ * real login (see DEVICE_ID_STORAGE_KEY below).
+ */
+
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ActivityIndicator,
+  FlatList,
+  Keyboard,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+// `SafeAreaView` from "react-native-safe-area-context" (NOT the "react-native"
+// one used previously) -- the plain "react-native" `SafeAreaView` is an
+// iOS-only no-op: on Android it's just a plain `View` and reserves no space
+// at all for the status bar. That's exactly why "My list"'s header rendered
+// underneath the status bar clock/icons on a real Android install (visible
+// in Snack too, but Snack's web preview has no real status bar to overlap,
+// which is why this one was never caught until the app was actually
+// installed on a phone). This version genuinely pads for the safe area on
+// both platforms.
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
+import { NavigationContainer } from "@react-navigation/native";
+import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+import { createNativeStackNavigator } from "@react-navigation/native-stack";
+
+// ---------------------------------------------------------------------
+// Already set to the real, deployed Render API -- shouldn't need to touch
+// this most of the time.
+//
+// The one reason to CHANGE THIS: testing against the API running on your
+// own computer instead. Requires your phone and computer on the same
+// WiFi, and your computer's LAN address, e.g. "http://192.168.1.23:8000"
+// (NOT "localhost" -- your phone can't reach "localhost" meaning itself).
+// See ../SETUP.md in xirja-backend -> "Running the API locally". Switch
+// this back to the Render address afterwards.
+// ---------------------------------------------------------------------
+const API_BASE_URL = "https://xirja-backend.onrender.com";
+
+const REQUEST_TIMEOUT_MS = 45000; // see fetchJson()'s comment for why 45s
+
+// ---------------------------------------------------------------------
+// On DEVICE_USER_ID: there's no real login system yet -- accounts are a
+// later step (see PROGRESS.md in xirja-backend). Until then, each phone
+// generates one random id the first time this app opens and keeps it in
+// AsyncStorage (survives closing the app; wiped if you reinstall it or
+// clear app data). It's meaningless outside "which list is this
+// device's" -- not an email, not a name, nothing personal.
+// ---------------------------------------------------------------------
+const DEVICE_ID_STORAGE_KEY = "xirja_device_user_id";
+
+function makeDeviceId() {
+  return "device_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 10);
+}
+
+async function getDeviceId() {
+  const existing = await AsyncStorage.getItem(DEVICE_ID_STORAGE_KEY);
+  if (existing) return existing;
+  const created = makeDeviceId();
+  await AsyncStorage.setItem(DEVICE_ID_STORAGE_KEY, created);
+  return created;
+}
+
+// ---------------------------------------------------------------------
+// Shopping mode's checked-off state -- which items you've already put in
+// the trolley -- used to live only in React state, so closing the app (or
+// it getting killed in the background) mid-trip lost every checkmark.
+// Persisted here the same way the device id itself is: AsyncStorage, keyed
+// per device so it doesn't collide with anyone else testing against the
+// same API. Deliberately keyed by DEVICE id, not by list id -- there's
+// only ever one list per device right now (no real accounts yet, see
+// DEVICE_ID_STORAGE_KEY above), so the two would be equivalent, but the
+// device id is the one guaranteed to exist before the list has loaded.
+// ---------------------------------------------------------------------
+const CHECKED_ITEMS_STORAGE_KEY_PREFIX = "xirja_checked_item_ids_";
+
+async function loadCheckedItemIds(deviceId) {
+  try {
+    const raw = await AsyncStorage.getItem(CHECKED_ITEMS_STORAGE_KEY_PREFIX + deviceId);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return new Set(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    // Corrupt or unreadable storage -- start with an empty checklist rather
+    // than crash the app over a lost set of checkmarks.
+    return new Set();
+  }
+}
+
+async function saveCheckedItemIds(deviceId, checkedItemIds) {
+  try {
+    await AsyncStorage.setItem(
+      CHECKED_ITEMS_STORAGE_KEY_PREFIX + deviceId,
+      JSON.stringify(Array.from(checkedItemIds))
+    );
+  } catch {
+    // Best-effort -- a failed save here shouldn't interrupt shopping.
+  }
+}
+
+// ---------------------------------------------------------------------
+// "My list"'s own editable label (e.g. "WEEKLY SHOP") -- purely cosmetic,
+// so it's kept local-only (AsyncStorage, keyed per device like the
+// checked-items above) rather than adding a real "named lists" concept to
+// the backend. There's still only one list per device (see
+// DEVICE_ID_STORAGE_KEY above); this just lets that one list have a name
+// on screen instead of always saying the generic "My list".
+// ---------------------------------------------------------------------
+const LIST_LABEL_STORAGE_KEY_PREFIX = "xirja_list_label_";
+const DEFAULT_LIST_LABEL = "WEEKLY SHOP";
+
+async function loadListLabel(deviceId) {
+  try {
+    const raw = await AsyncStorage.getItem(LIST_LABEL_STORAGE_KEY_PREFIX + deviceId);
+    return raw && raw.trim() ? raw : DEFAULT_LIST_LABEL;
+  } catch {
+    return DEFAULT_LIST_LABEL;
+  }
+}
+
+async function saveListLabel(deviceId, label) {
+  try {
+    await AsyncStorage.setItem(LIST_LABEL_STORAGE_KEY_PREFIX + deviceId, label);
+  } catch {
+    // Best-effort -- a failed save here just means the label reverts to
+    // the default next launch, nothing worth interrupting the user over.
+  }
+}
+
+/**
+ * Wraps fetch() with a timeout and consistent error shapes -- fetch() has
+ * no built-in timeout, and left alone a request that never gets a
+ * response (a WiFi network silently dropping it, or Render's free tier
+ * waking up from sleep) shows a permanent spinner with no explanation
+ * instead of a clear, recoverable error.
+ *
+ * Also retries ONCE, automatically, on a true network-level failure (the
+ * browser's own "Failed to fetch" / "Network request failed" -- thrown
+ * before any HTTP response comes back at all, as opposed to the server
+ * responding with an error status). This specific failure is the classic
+ * symptom of Render's free tier waking from sleep: the very first request
+ * that reaches a sleeping service wakes it up but can itself get refused
+ * or reset while the container is still starting, while a request a
+ * second or two later succeeds normally. One retry, after a short pause,
+ * covers exactly that window without masking a REAL, repeatable problem
+ * (which would fail the retry too, and still surface as an error).
+ */
+async function fetchJsonOnce(path, options) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${API_BASE_URL}${path}`, {
+      ...options,
+      signal: controller.signal,
+      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    });
+    if (!response.ok) {
+      let detail = `Server said ${response.status}`;
+      try {
+        const body = await response.json();
+        if (body && body.detail) detail = body.detail;
+      } catch (_e) {
+        // response wasn't JSON -- keep the generic message above
+      }
+      throw new Error(detail);
+    }
+    return await response.json();
+  } catch (err) {
+    if (err.name === "AbortError") {
+      throw new Error("Timed out -- try again (Render may be waking up)");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function isNetworkLevelFailure(err) {
+  // What the browser/React Native throw when a request never got a
+  // response at all -- distinct from the server answering with a 4xx/5xx
+  // (handled above) or our own explicit timeout message.
+  const msg = (err && err.message) || "";
+  return msg.includes("Failed to fetch") || msg.includes("Network request failed");
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchJson(path, options = {}) {
+  try {
+    return await fetchJsonOnce(path, options);
+  } catch (err) {
+    if (!isNetworkLevelFailure(err)) throw err;
+    await sleep(1500);
+    return await fetchJsonOnce(path, options); // let a second failure throw normally
+  }
+}
+
+const eur = (n) => "€" + n.toFixed(2);
+
+// ============================================================================
+// "My list" screen
+// ============================================================================
+
+function AddItemBar({ categories, onAdd, disabled, onBrowse }) {
+  const [query, setQuery] = useState("");
+  const inputRef = useRef(null);
+
+  const suggestions = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    return categories
+      .filter((c) => c.category.toLowerCase().includes(q))
+      .slice(0, 5);
+  }, [query, categories]);
+
+  function pick(category) {
+    onAdd(category);
+    setQuery("");
+    Keyboard.dismiss();
+  }
+
+  return (
+    <View style={styles.addWrap}>
+      <View style={styles.addInputRow}>
+        <Text style={styles.addPlus}>+</Text>
+        <TextInput
+          ref={inputRef}
+          value={query}
+          onChangeText={setQuery}
+          placeholder="Add an item…"
+          style={styles.addInput}
+          editable={!disabled}
+          returnKeyType="done"
+          onSubmitEditing={() => {
+            if (suggestions.length > 0) pick(suggestions[0].category);
+          }}
+        />
+        {onBrowse && (
+          <Pressable onPress={onBrowse} style={styles.browseBtn} hitSlop={8}>
+            <Text style={styles.browseBtnText}>Browse</Text>
+          </Pressable>
+        )}
+      </View>
+      {suggestions.length > 0 && (
+        <View style={styles.suggestBox}>
+          {suggestions.map((s) => (
+            <Pressable
+              key={s.category}
+              onPress={() => pick(s.category)}
+              style={({ pressed }) => [
+                styles.suggestRow,
+                pressed && styles.suggestRowPressed,
+              ]}
+            >
+              <Text style={styles.suggestName}>{s.category}</Text>
+              <Text style={styles.suggestHint}>{s.store_count} store{s.store_count === 1 ? "" : "s"}</Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
+    </View>
+  );
+}
+
+function ListRow({ item, onInc, onDec, onRemove, onOpenDetail, busy }) {
+  const { cheapest } = item;
+  // Savings: what you'd have paid at this item's priciest listed store,
+  // versus the cheapest one -- only meaningful (and only shown) when the
+  // item is actually priced at more than one store.
+  const savings =
+    cheapest && item.by_store.length > 1
+      ? (Math.max(...item.by_store.map((s) => s.price)) - cheapest.price) * item.quantity
+      : 0;
+  return (
+    <View style={styles.row}>
+      <View
+        style={[
+          styles.ribbon,
+          { backgroundColor: cheapest ? cheapest.color : "rgba(22,23,26,.14)" },
+        ]}
+      />
+      <Pressable style={styles.rowMain} onPress={() => onOpenDetail(item)}>
+        <Text style={styles.itemName}>{item.category}</Text>
+        {cheapest ? (
+          <Text style={styles.itemSub}>
+            {cheapest.store_name}
+            {item.by_store.length > 1 ? ` · ${item.by_store.length} stores` : ""} · details
+          </Text>
+        ) : (
+          <Text style={styles.itemSubMuted}>no price found right now · details</Text>
+        )}
+      </Pressable>
+      <View style={styles.priceCol}>
+        <Text style={styles.price}>{cheapest ? eur(cheapest.price * item.quantity) : "—"}</Text>
+        {savings > 0.004 && <Text style={styles.savingsText}>save {eur(savings)}</Text>}
+        <View style={styles.qtyRow}>
+          <Pressable onPress={() => onDec(item)} disabled={busy} style={styles.qtyBtn}>
+            <Text style={styles.qtyBtnText}>−</Text>
+          </Pressable>
+          <Text style={styles.qtyValue}>{item.quantity}</Text>
+          <Pressable onPress={() => onInc(item)} disabled={busy} style={styles.qtyBtn}>
+            <Text style={styles.qtyBtnText}>+</Text>
+          </Pressable>
+        </View>
+      </View>
+      <Pressable onPress={() => onRemove(item)} disabled={busy} style={styles.removeBtn}>
+        <Text style={styles.removeBtnText}>✕</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+function ListLabelEditor({ listLabel, onSetListLabel }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(listLabel);
+
+  useEffect(() => {
+    if (!editing) setDraft(listLabel);
+  }, [listLabel, editing]);
+
+  function commit() {
+    const trimmed = draft.trim();
+    onSetListLabel(trimmed ? trimmed.toUpperCase() : DEFAULT_LIST_LABEL);
+    setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <TextInput
+        value={draft}
+        onChangeText={setDraft}
+        style={styles.listLabelInput}
+        autoFocus
+        autoCapitalize="characters"
+        returnKeyType="done"
+        onSubmitEditing={commit}
+        onBlur={commit}
+        maxLength={30}
+      />
+    );
+  }
+  return (
+    <Pressable onPress={() => setEditing(true)} hitSlop={6}>
+      <Text style={styles.listLabel}>{listLabel} ✎</Text>
+    </Pressable>
+  );
+}
+
+function ListScreen({
+  items,
+  categories,
+  loading,
+  refreshing,
+  busyItemId,
+  errorMessage,
+  listLabel,
+  onSetListLabel,
+  onRefresh,
+  onAdd,
+  onInc,
+  onDec,
+  onRemove,
+  onOpenDetail,
+  onBrowse,
+  onGoToCompare,
+}) {
+  const totalSavings = items.reduce((sum, it) => {
+    if (!it.cheapest || it.by_store.length <= 1) return sum;
+    return sum + (Math.max(...it.by_store.map((s) => s.price)) - it.cheapest.price) * it.quantity;
+  }, 0);
+
+  return (
+    <View style={styles.screen}>
+      <View style={styles.header}>
+        <View style={styles.headerRow}>
+          <View style={styles.headerLeft}>
+            <Text style={styles.title}>My list</Text>
+            <ListLabelEditor listLabel={listLabel} onSetListLabel={onSetListLabel} />
+          </View>
+          <View style={styles.headerCount}>
+            <Text style={styles.headerCountNumber}>{items.length}</Text>
+            <Text style={styles.headerCountLabel}>{items.length === 1 ? "item" : "items"}</Text>
+          </View>
+        </View>
+      </View>
+
+      <AddItemBar categories={categories} onAdd={onAdd} disabled={loading} onBrowse={onBrowse} />
+
+      {errorMessage && (
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorBannerText}>{errorMessage}</Text>
+        </View>
+      )}
+
+      {loading ? (
+        <View style={styles.centerFill}>
+          <ActivityIndicator size="large" />
+        </View>
+      ) : (
+        <FlatList
+          data={items}
+          keyExtractor={(item) => item.item_id}
+          renderItem={({ item }) => (
+            <ListRow
+              item={item}
+              busy={busyItemId === item.item_id}
+              onInc={(it) => onInc(it)}
+              onDec={(it) => onDec(it)}
+              onRemove={onRemove}
+              onOpenDetail={onOpenDetail}
+            />
+          )}
+          ItemSeparatorComponent={() => <View style={styles.separator} />}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
+          contentContainerStyle={styles.listContent}
+          ListEmptyComponent={
+            <Text style={styles.emptyText}>Nothing on the list yet -- add something above, or switch to Browse.</Text>
+          }
+        />
+      )}
+
+      {!loading && items.length > 0 && (
+        <Pressable style={styles.compareCta} onPress={onGoToCompare}>
+          <Text style={styles.compareCtaText}>
+            Find the best prices{totalSavings > 0.004 ? ` — save up to ${eur(totalSavings)}` : ""} →
+          </Text>
+        </Pressable>
+      )}
+    </View>
+  );
+}
+
+// ============================================================================
+// "Item detail" screen
+// ============================================================================
+//
+// Tapping any item on "My list" opens this. The current-price half (the
+// "Cheapest right now" card and the full "All stores" breakdown) reuses
+// data the list screen already has -- item.cheapest / item.by_store, from
+// GET /lists/{user_id} -- no extra fetch needed for that part. The history
+// half is new: GET /categories/{category}/history is the first endpoint in
+// this app that looks further back than "the single latest price," so it's
+// fetched fresh each time this screen opens for a given item.
+
+function weekLabel(isoDate) {
+  const d = new Date(isoDate);
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+// How recently a store's price was actually observed by a crawler --
+// `observed_at` straight from the same `price_observation` row every price
+// on this screen already comes from (see fetch_cheapest_for_category in
+// api/main.py), just not previously shown anywhere in the app. Deliberately
+// coarse (today/yesterday/"Nd ago"/a short date) rather than an exact
+// timestamp -- a shopper cares whether a price is stale, not the precise
+// minute it was crawled.
+function formatObservedAt(isoString) {
+  if (!isoString) return null;
+  const observed = new Date(isoString);
+  if (isNaN(observed.getTime())) return null;
+  const now = new Date();
+  const hh = String(observed.getHours()).padStart(2, "0");
+  const mm = String(observed.getMinutes()).padStart(2, "0");
+  if (observed.toDateString() === now.toDateString()) return `today ${hh}:${mm}`;
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (observed.toDateString() === yesterday.toDateString()) return `yesterday ${hh}:${mm}`;
+  const diffDays = Math.round((now - observed) / (1000 * 60 * 60 * 24));
+  if (diffDays > 0 && diffDays < 7) return `${diffDays}d ago`;
+  return observed.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+// "€1.20/l" style unit price -- price_per_unit / price_per_unit_measure
+// are null whenever a crawler couldn't work out a per-unit figure for that
+// listing (see PER_UNIT_DIVISORS / PHYSICAL_UNITS in the crawlers), so this
+// stays null rather than showing a misleading "/undefined".
+function formatUnitPrice(offer) {
+  if (!offer || offer.price_per_unit == null || !offer.price_per_unit_measure) return null;
+  return `${eur(offer.price_per_unit)}/${offer.price_per_unit_measure}`;
+}
+
+function computeTrend(weeks) {
+  if (weeks.length < 2) return null;
+  const first = weeks[0].price;
+  const last = weeks[weeks.length - 1].price;
+  if (first === 0) return null;
+  const pctChange = ((last - first) / first) * 100;
+  if (Math.abs(pctChange) < 1) {
+    return `Roughly flat since ${weekLabel(weeks[0].week_start)}.`;
+  }
+  const direction = pctChange > 0 ? "up" : "down";
+  return `Price is ${direction} ${Math.abs(pctChange).toFixed(0)}% since ${weekLabel(weeks[0].week_start)}.`;
+}
+
+function HistoryBars({ weeks }) {
+  if (weeks.length === 0) {
+    return <Text style={styles.itemSubMuted}>No history yet for this store.</Text>;
+  }
+  const prices = weeks.map((w) => w.price);
+  const maxPrice = Math.max(...prices);
+  const minPrice = Math.min(...prices);
+  const range = maxPrice - minPrice || maxPrice || 1;
+
+  return (
+    <View style={styles.historyBarsRow}>
+      {weeks.map((w, i) => {
+        // Every bar stays at least partly visible (18% floor) even for the
+        // very lowest week -- an empty-looking bar reads as "no data",
+        // which would be misleading when there IS a real price, it's just
+        // the cheapest one in this stretch.
+        const heightPct = 18 + ((w.price - minPrice) / range) * 82;
+        const isLast = i === weeks.length - 1;
+        return (
+          <View key={w.week_start} style={styles.historyBarCol}>
+            <Text style={styles.historyBarPrice}>{eur(w.price)}</Text>
+            <View style={styles.historyBarTrack}>
+              <View
+                style={[
+                  styles.historyBarFill,
+                  { height: `${heightPct}%` },
+                  isLast && styles.historyBarFillLast,
+                ]}
+              />
+            </View>
+            <Text style={styles.historyBarLabel}>{weekLabel(w.week_start)}</Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+function ItemDetailScreen({ item, onBack }) {
+  const [history, setHistory] = useState(null); // null while the first load is in flight
+  const [historyError, setHistoryError] = useState(null);
+  const [selectedStoreId, setSelectedStoreId] = useState(
+    item.cheapest ? item.cheapest.store_id : null
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    setHistory(null);
+    setHistoryError(null);
+    fetchJson(`/categories/${encodeURIComponent(item.category)}/history`)
+      .then((result) => {
+        if (cancelled) return;
+        setHistory(result.stores);
+        if (result.stores.length > 0 && !result.stores.some((s) => s.store_id === selectedStoreId)) {
+          setSelectedStoreId(result.stores[0].store_id);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setHistoryError(err.message || "Couldn't load price history");
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Deliberately keyed on the category alone -- re-fetching if the user
+    // just clicks a different store chip below would be pointless, the
+    // whole history response already contains every store at once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item.category]);
+
+  const selectedStoreHistory = history
+    ? history.find((s) => s.store_id === selectedStoreId)
+    : null;
+  const trendText = selectedStoreHistory ? computeTrend(selectedStoreHistory.weeks) : null;
+
+  return (
+    <View style={styles.screen}>
+      <View style={styles.subHeader}>
+        <Pressable onPress={onBack} style={styles.backBtn}>
+          <Text style={styles.backBtnText}>‹</Text>
+        </Pressable>
+        <View style={styles.subHeaderText}>
+          <Text style={styles.title}>{item.category}</Text>
+          <Text style={styles.subtitle}>
+            {item.by_store.length} store{item.by_store.length === 1 ? "" : "s"} carry this right now
+          </Text>
+          {item.cheapest && item.cheapest.product_name ? (
+            <Text style={styles.subtitleMuted} numberOfLines={1}>
+              {item.cheapest.product_name}
+            </Text>
+          ) : null}
+          {item.cheapest && formatUnitPrice(item.cheapest) ? (
+            <Text style={styles.subtitleMuted}>{formatUnitPrice(item.cheapest)}</Text>
+          ) : null}
+        </View>
+      </View>
+
+      <ScrollView contentContainerStyle={styles.listContent}>
+        {item.cheapest ? (
+          <View style={styles.detailBestCard}>
+            <Text style={styles.detailBestLabel}>Cheapest right now</Text>
+            <Text style={styles.detailBestPrice}>{eur(item.cheapest.price)}</Text>
+            <Text style={styles.detailBestStore}>{item.cheapest.store_name}</Text>
+            {formatObservedAt(item.cheapest.observed_at) && (
+              <Text style={styles.detailBestFreshness}>
+                updated {formatObservedAt(item.cheapest.observed_at)}
+              </Text>
+            )}
+          </View>
+        ) : (
+          <View style={styles.detailBestCard}>
+            <Text style={styles.itemSubMuted}>No price found anywhere right now.</Text>
+          </View>
+        )}
+
+        <Text style={styles.sectionLabel}>All stores</Text>
+        {item.by_store.map((offer) => {
+          const unitPrice = formatUnitPrice(offer);
+          const freshness = formatObservedAt(offer.observed_at);
+          // Two separate lines, not one joined string -- a joined line with
+          // a real product name (which can run long) was pushing the unit
+          // price / freshness clean off the end and truncating invisibly
+          // (no visual cue it was cut short, just silently missing info).
+          // The product name is the one piece long enough to actually need
+          // truncating; unit price + freshness together are always short.
+          const metaLine = [unitPrice, freshness ? `updated ${freshness}` : null]
+            .filter(Boolean)
+            .join(" · ");
+          return (
+            <View key={offer.store_id} style={styles.detailOfferRow}>
+              <View style={styles.detailOfferTop}>
+                <View style={[styles.detailOfferChip, { backgroundColor: offer.color }]}>
+                  <Text style={styles.detailOfferChipText}>{offer.short_code}</Text>
+                </View>
+                <Text style={styles.detailOfferName}>{offer.store_name}</Text>
+                <Text style={styles.detailOfferPrice}>{eur(offer.price)}</Text>
+              </View>
+              {offer.product_name ? (
+                <Text style={styles.detailOfferSource} numberOfLines={1}>
+                  {offer.product_name}
+                </Text>
+              ) : null}
+              {metaLine ? <Text style={styles.detailOfferMeta}>{metaLine}</Text> : null}
+            </View>
+          );
+        })}
+
+        <Text style={styles.sectionLabel}>8-week price history</Text>
+        {historyError ? (
+          <Text style={styles.errorBannerText}>{historyError}</Text>
+        ) : history === null ? (
+          <View style={styles.centerFillSmall}>
+            <ActivityIndicator />
+          </View>
+        ) : history.length === 0 ? (
+          <Text style={styles.itemSubMuted}>No price history recorded yet for this category.</Text>
+        ) : (
+          <View style={styles.historyCard}>
+            <View style={styles.historyChipsRow}>
+              {history.map((s) => {
+                const active = s.store_id === selectedStoreId;
+                return (
+                  <Pressable
+                    key={s.store_id}
+                    onPress={() => setSelectedStoreId(s.store_id)}
+                    style={[
+                      styles.historyChip,
+                      { borderColor: s.color },
+                      active && { backgroundColor: s.color },
+                    ]}
+                  >
+                    <Text style={[styles.historyChipText, active && styles.historyChipTextActive]}>
+                      {s.short_code}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            {selectedStoreHistory && <HistoryBars weeks={selectedStoreHistory.weeks} />}
+            {trendText && <Text style={styles.historyTrend}>{trendText}</Text>}
+          </View>
+        )}
+      </ScrollView>
+    </View>
+  );
+}
+
+// ============================================================================
+// "Browse" screen
+// ============================================================================
+//
+// Scrolls every category that currently has a real price behind it (the
+// same /categories the "My list" search box already uses), letting you
+// tap + to add one without needing to know/type its exact name. Tapping +
+// again just adds another one -- same "bump the quantity" behaviour as
+// typing the same category twice in "My list".
+
+// A department is a coarse grouping OVER the ~150+ fine-grained shopping
+// categories (see category_taxonomy.py in xirja-backend for how those are
+// built) -- purely a Browse-screen display/filter convenience, not a real
+// data-model concept, so it's kept here as a client-only keyword classifier
+// rather than a backend change. Same spirit as that file's own
+// name-based fallback classification: a reasonable first draft built by
+// looking at real category names, not a perfectly reviewed taxonomy.
+// Order matters -- checked top to bottom, first match wins (e.g. "Fish &
+// Other Animals" must hit Meat & fish before anything else gets a chance).
+const DEPARTMENTS = ["All", "Fruit & veg", "Bakery", "Dairy & chilled", "Meat & fish", "Drinks", "Pantry", "Other"];
+
+function classifyDepartment(categoryName) {
+  const s = categoryName.toLowerCase();
+  const has = (...words) => words.some((w) => s.includes(w));
+  if (has("milk", "cheese", "yoghurt", "yogurt", "dairy", "butter", "cream", "egg")) return "Dairy & chilled";
+  if (has("meat", "chicken", "beef", "pork", "ham", "sausage", "fish", "seafood", "salmon", "tuna", "poultry")) {
+    return "Meat & fish";
+  }
+  if (has("fruit", "veg", "salad", "potato", "onion", "tomato")) return "Fruit & veg";
+  if (has("bread", "bakery", "cake", "pastry", "bun", "croissant")) return "Bakery";
+  if (has("juice", "water", "beer", "wine", "cider", "spirit", "whisky", "carbonated", "soft drink", "beverage")) {
+    return "Drinks";
+  }
+  if (
+    has(
+      "pasta", "rice", "cereal", "sauce", "condiment", "canned", "nut", "snack", "chocolate",
+      "coffee", "tea", "spice", "herb", "oil", "sugar", "flour", "biscuit", "cracker", "sweet",
+      "food", "pizza", "dip", "couscous"
+    )
+  ) {
+    return "Pantry";
+  }
+  return "Other";
+}
+
+function DepartmentChips({ selected, onSelect }) {
+  // A plain wrapping View, deliberately NOT a horizontal ScrollView --
+  // that was tried first and collapsed to a sliver on Android (see
+  // PROGRESS.md's "Real discrepancy #8"), then, even after giving it an
+  // explicit height, still rendered visibly clipped/cut off on a real
+  // device. Rather than keep chasing a ScrollView-specific Android sizing
+  // quirk blind (this sandbox has no way to actually render and screenshot
+  // RN layout to confirm a fix), wrapping to a second line is a small,
+  // guaranteed-safe trade for only 8 short chips -- no ScrollView, no
+  // cross-axis sizing to get wrong, works identically on every platform.
+  return (
+    <View style={styles.deptChipsWrap}>
+      {DEPARTMENTS.map((dept) => {
+        const active = dept === selected;
+        return (
+          <Pressable
+            key={dept}
+            onPress={() => onSelect(dept)}
+            style={[styles.deptChip, active && styles.deptChipActive]}
+          >
+            <Text style={[styles.deptChipText, active && styles.deptChipTextActive]}>{dept}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+function BrowseRow({ entry, inCartQuantity, onAdd, busy }) {
+  const added = inCartQuantity > 0;
+  return (
+    <View style={styles.browseRow}>
+      <View style={styles.rowMain}>
+        <Text style={styles.itemName}>{entry.category}</Text>
+        <Text style={styles.itemSubMuted}>
+          {entry.min_price != null ? `from ${eur(entry.min_price)} · ` : ""}
+          {entry.store_count} store{entry.store_count === 1 ? "" : "s"} carry this right now
+        </Text>
+      </View>
+      <Pressable
+        onPress={() => onAdd(entry.category)}
+        disabled={busy}
+        style={[styles.browseAddBtn, added && styles.browseAddBtnActive]}
+      >
+        <Text style={[styles.browseAddBtnText, added && styles.browseAddBtnTextActive]}>
+          {added ? `✓ ${inCartQuantity}` : "+ Add"}
+        </Text>
+      </Pressable>
+    </View>
+  );
+}
+
+function BrowseScreen({ categories, items, loading, refreshing, onRefresh, onAdd, busyCategory }) {
+  const [query, setQuery] = useState("");
+  const [department, setDepartment] = useState("All");
+
+  const quantityByCategory = useMemo(() => {
+    const map = {};
+    items.forEach((it) => {
+      map[it.category] = it.quantity;
+    });
+    return map;
+  }, [items]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return categories.filter((c) => {
+      if (q && !c.category.toLowerCase().includes(q)) return false;
+      if (department !== "All" && classifyDepartment(c.category) !== department) return false;
+      return true;
+    });
+  }, [query, department, categories]);
+
+  return (
+    <View style={styles.screen}>
+      <View style={styles.header}>
+        <Text style={styles.title}>Browse</Text>
+        <Text style={styles.subtitle}>
+          {categories.length} categor{categories.length === 1 ? "y" : "ies"} with a live price right now
+        </Text>
+      </View>
+
+      <View style={styles.addWrap}>
+        <View style={styles.addInputRow}>
+          <Text style={styles.addPlus}>⌕</Text>
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Filter categories…"
+            style={styles.addInput}
+          />
+        </View>
+      </View>
+
+      <DepartmentChips selected={department} onSelect={setDepartment} />
+
+      {loading ? (
+        <View style={styles.centerFill}>
+          <ActivityIndicator size="large" />
+        </View>
+      ) : (
+        <FlatList
+          data={filtered}
+          keyExtractor={(entry) => entry.category}
+          renderItem={({ item: entry }) => (
+            <BrowseRow
+              entry={entry}
+              inCartQuantity={quantityByCategory[entry.category] || 0}
+              onAdd={onAdd}
+              busy={busyCategory === entry.category}
+            />
+          )}
+          ItemSeparatorComponent={() => <View style={styles.separator} />}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
+          contentContainerStyle={styles.listContent}
+          ListEmptyComponent={
+            <Text style={styles.emptyText}>No categories match that search.</Text>
+          }
+        />
+      )}
+    </View>
+  );
+}
+
+// ============================================================================
+// "Compare" screen
+// ============================================================================
+//
+// The app's core value: for each real store, "if everything on this list
+// came from here, plus whatever it doesn't carry bought at whichever
+// OTHER store is cheapest for that item, what's the real total?" -- ranked
+// cheapest to most expensive. This is the same rule the original
+// clickable prototype's storeTotal() used ("comparable" = what this store
+// rings up + the cost of buying its gaps elsewhere), now computed from
+// real data instead of a hardcoded 18-item catalog.
+//
+// Deliberately computed here on the phone, not as a new API endpoint:
+// every number this needs (each item's price at every store that carries
+// it, and its cheapest price anywhere) is already sitting in the `items`
+// this screen is given -- see each item's `by_store` and `cheapest`
+// fields, straight from GET /lists/{user_id}. Sending that same data to a
+// new endpoint just to get a ranking back would be a round-trip for
+// nothing; the actual list of real stores (GET /stores) is the one piece
+// this couldn't derive on its own, since a store carrying zero of today's
+// items wouldn't otherwise appear anywhere in the data at all.
+
+function computeStoreRanking(items, stores) {
+  return stores
+    .map((store) => {
+      let total = 0; // what this store itself rings up
+      let elsewhere = 0; // cost of buying its gaps at their own cheapest store
+      const missingNames = [];
+
+      items.forEach((item) => {
+        const offer = item.by_store.find((o) => o.store_id === store.store_id);
+        if (offer) {
+          total += offer.price * item.quantity;
+        } else {
+          missingNames.push(item.category);
+          if (item.cheapest) {
+            elsewhere += item.cheapest.price * item.quantity;
+          }
+          // an item with NO cheapest anywhere (out of stock everywhere)
+          // simply can't be priced into any store's total -- same gap
+          // for every store, so it doesn't change the ranking either way.
+        }
+      });
+
+      return {
+        ...store,
+        total,
+        elsewhere,
+        comparable: total + elsewhere,
+        missingCount: missingNames.length,
+        missingNames,
+      };
+    })
+    .sort((a, b) => a.comparable - b.comparable);
+}
+
+// The three strategies Compare can show, all built from the exact same
+// per-item data (`item.by_store` / `item.cheapest`) -- just a different
+// rule for "which store does this item come from":
+//   "one"  -- everything from ONE store, its own gaps filled in at
+//             whichever OTHER store is cheapest (computeStoreRanking above).
+//   "each" -- every item from its own individually cheapest store,
+//             regardless of how many stops that means (the same total
+//             "Split into N store lists" already implies).
+//   "two"  -- the best PAIR of stores, each item bought from whichever of
+//             the two is cheaper (or, failing that, a third "elsewhere"
+//             stop) -- new for this pass.
+
+function resolveItemForStorePair(item, storeA, storeB) {
+  const offerA = storeA ? item.by_store.find((o) => o.store_id === storeA.store_id) : null;
+  const offerB = storeB ? item.by_store.find((o) => o.store_id === storeB.store_id) : null;
+  if (offerA && offerB) return offerA.price <= offerB.price ? offerA : offerB;
+  if (offerA) return offerA;
+  if (offerB) return offerB;
+  // Neither of the two chosen stores carries it right now -- falls back to
+  // wherever it's cheapest anywhere, same "elsewhere" idea as the one-store
+  // ranking above, just flagged so the breakdown can call it a third stop.
+  return item.cheapest || null;
+}
+
+function computeCheapestEachTotal(items) {
+  let total = 0;
+  let unpricedCount = 0;
+  items.forEach((item) => {
+    if (item.cheapest) total += item.cheapest.price * item.quantity;
+    else unpricedCount += 1;
+  });
+  return { total, unpricedCount };
+}
+
+// Brute-forces every pair of real stores -- fine even for a much bigger
+// store list than this app's real 3 chains, since it's O(pairs x items)
+// and both stay small; no need for anything cleverer.
+function computeBestTwoStores(items, stores) {
+  if (stores.length < 2) return null;
+  let best = null;
+  for (let i = 0; i < stores.length; i++) {
+    for (let j = i + 1; j < stores.length; j++) {
+      const storeA = stores[i];
+      const storeB = stores[j];
+      let total = 0;
+      let elsewhereCount = 0;
+      items.forEach((item) => {
+        const resolved = resolveItemForStorePair(item, storeA, storeB);
+        if (resolved) total += resolved.price * item.quantity;
+      });
+      const candidate = { storeA, storeB, total, elsewhereCount };
+      if (!best || candidate.total < best.total) best = candidate;
+    }
+  }
+  return best;
+}
+
+// Builds the "which store does each item come from" rows the expandable
+// breakdown shows, for any of the three strategies -- `resolve(item)`
+// returns the winning `by_store` entry (or item.cheapest as an "elsewhere"
+// fallback), or null if nothing prices it anywhere right now.
+function buildBreakdownRows(items, resolve) {
+  return items.map((item) => ({ item, offer: resolve(item) }));
+}
+
+function CompareBreakdown({ rows }) {
+  return (
+    <View style={styles.compareBreakdown}>
+      {rows.map(({ item, offer }) => (
+        <View key={item.item_id} style={styles.compareBreakdownRow}>
+          <View
+            style={[
+              styles.compareBreakdownDot,
+              { backgroundColor: offer ? offer.color : "rgba(11,11,11,0.14)" },
+            ]}
+          />
+          <Text style={styles.compareBreakdownName} numberOfLines={1}>
+            {item.category}
+          </Text>
+          {offer ? (
+            <Text style={styles.compareBreakdownStore} numberOfLines={1}>
+              {offer.store_name}
+            </Text>
+          ) : (
+            <Text style={styles.compareBreakdownStoreMuted}>not priced</Text>
+          )}
+          <Text style={styles.compareBreakdownPrice}>
+            {offer ? eur(offer.price * item.quantity) : "—"}
+          </Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function StrategyToggle({ strategy, onChange }) {
+  const options = [
+    { key: "each", label: "Cheapest each" },
+    { key: "two", label: "2 stores" },
+    { key: "one", label: "One store" },
+  ];
+  return (
+    <View style={styles.strategyToggle}>
+      {options.map((opt) => {
+        const active = opt.key === strategy;
+        return (
+          <Pressable
+            key={opt.key}
+            onPress={() => onChange(opt.key)}
+            style={[styles.strategyOption, active && styles.strategyOptionActive]}
+          >
+            <Text style={[styles.strategyOptionText, active && styles.strategyOptionTextActive]}>
+              {opt.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+function CompareScreen({ items, stores, loading, refreshing, onRefresh, onSplit }) {
+  if (loading) {
+    return (
+      <View style={styles.screen}>
+        <View style={styles.header}>
+          <Text style={styles.title}>Compare</Text>
+        </View>
+        <View style={styles.centerFill}>
+          <ActivityIndicator size="large" />
+        </View>
+      </View>
+    );
+  }
+
+  if (items.length === 0) {
+    return (
+      <View style={styles.screen}>
+        <View style={styles.header}>
+          <Text style={styles.title}>Compare</Text>
+          <Text style={styles.subtitle}>Add something to your list first</Text>
+        </View>
+        <ScrollView
+          contentContainerStyle={styles.centerFill}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        >
+          <Text style={styles.emptyText}>
+            Compare needs at least one item on "My list" to work out a real total per store.
+          </Text>
+        </ScrollView>
+      </View>
+    );
+  }
+
+  if (stores.length === 0) {
+    // Not the same as "no items" -- this means /stores itself hasn't
+    // loaded (still in flight, or its own fetch failed and the error
+    // banner on another tab already said so). Wrapped in a real
+    // pull-to-refresh (not just text telling you to) so there's an actual
+    // way to retry from here, same as every other screen.
+    return (
+      <View style={styles.screen}>
+        <View style={styles.header}>
+          <Text style={styles.title}>Compare</Text>
+          <Text style={styles.subtitle}>Couldn't load the store list</Text>
+        </View>
+        <ScrollView
+          contentContainerStyle={styles.centerFill}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        >
+          <Text style={styles.emptyText}>Pull down to refresh and try again.</Text>
+        </ScrollView>
+      </View>
+    );
+  }
+
+  return (
+    <CompareStrategies
+      items={items}
+      stores={stores}
+      refreshing={refreshing}
+      onRefresh={onRefresh}
+      onSplit={onSplit}
+    />
+  );
+}
+
+// Split out as its own component (rather than inlined straight into
+// CompareScreen) purely so its strategy/expansion state -- new for this
+// pass -- doesn't have to be threaded through the loading/empty-state
+// early returns above, which never need it.
+function CompareStrategies({ items, stores, refreshing, onRefresh, onSplit }) {
+  const [strategy, setStrategy] = useState("one");
+  const [expandedStoreId, setExpandedStoreId] = useState(null);
+  const [showBreakdown, setShowBreakdown] = useState(false);
+
+  const ranked = computeStoreRanking(items, stores);
+  const maxComparable = ranked.length ? ranked[ranked.length - 1].comparable : 1;
+  const cheapest = ranked[0];
+  const mostExpensive = ranked[ranked.length - 1];
+  const wouldSave = mostExpensive.comparable - cheapest.comparable;
+  const splitStopCount = computeStoreLists(items).groups.length;
+  const eachResult = computeCheapestEachTotal(items);
+  const twoResult = computeBestTwoStores(items, stores);
+
+  let subtitle = `${items.length} item${items.length === 1 ? "" : "s"} · `;
+  if (strategy === "each") subtitle += "cheapest store per item";
+  else if (strategy === "two") subtitle += "best pair of stores";
+  else subtitle += "whole basket, per store";
+
+  return (
+    <View style={styles.screen}>
+      <View style={styles.header}>
+        <Text style={styles.title}>Compare</Text>
+        <Text style={styles.subtitle}>{subtitle}</Text>
+      </View>
+
+      <StrategyToggle strategy={strategy} onChange={setStrategy} />
+
+      {strategy === "one" && (
+        <FlatList
+          data={ranked}
+          keyExtractor={(store) => store.store_id}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+          contentContainerStyle={styles.listContent}
+          ListHeaderComponent={
+            wouldSave > 0 ? (
+              <View style={styles.compareSavingCard}>
+                <Text style={styles.compareSavingLabel}>Cheapest single store vs. most expensive</Text>
+                <Text style={styles.compareSavingValue}>{eur(wouldSave)}</Text>
+                <Text style={styles.compareSavingNote}>
+                  {cheapest.name} beats {mostExpensive.name} by this much for the exact same list.
+                </Text>
+              </View>
+            ) : null
+          }
+          renderItem={({ item: store, index }) => {
+            const expanded = expandedStoreId === store.store_id;
+            return (
+              <Pressable
+                style={styles.compareRow}
+                onPress={() => setExpandedStoreId(expanded ? null : store.store_id)}
+              >
+                <View style={styles.compareRowTop}>
+                  <Text style={[styles.compareStoreName, index === 0 && styles.compareStoreNameBest]}>
+                    {index === 0 ? "★ " : ""}
+                    {store.name}
+                  </Text>
+                  <Text style={[styles.compareTotal, index === 0 && styles.compareStoreNameBest]}>
+                    {eur(store.comparable)}
+                  </Text>
+                </View>
+                <View style={styles.compareBarTrack}>
+                  <View
+                    style={[
+                      styles.compareBarFill,
+                      {
+                        width: `${Math.max(6, (store.comparable / maxComparable) * 100)}%`,
+                        backgroundColor: index === 0 ? store.color : "rgba(11,11,11,0.18)",
+                      },
+                    ]}
+                  />
+                </View>
+                {store.missingCount > 0 && (
+                  <Text style={styles.compareNote}>
+                    {eur(store.total)} here + {eur(store.elsewhere)} for{" "}
+                    {store.missingCount === 1 ? store.missingNames[0] : `${store.missingCount} items`} elsewhere
+                  </Text>
+                )}
+                <Text style={styles.compareExpandHint}>{expanded ? "Hide" : "Show"} item-by-item ▾</Text>
+                {expanded && (
+                  <CompareBreakdown
+                    rows={buildBreakdownRows(
+                      items,
+                      (item) => item.by_store.find((o) => o.store_id === store.store_id) || item.cheapest
+                    )}
+                  />
+                )}
+              </Pressable>
+            );
+          }}
+        />
+      )}
+
+      {strategy === "each" && (
+        <ScrollView
+          contentContainerStyle={styles.listContent}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        >
+          <View style={styles.compareSavingCard}>
+            <Text style={styles.compareSavingLabel}>Every item from its own cheapest store</Text>
+            <Text style={styles.compareSavingValue}>{eur(eachResult.total)}</Text>
+            <Text style={styles.compareSavingNote}>
+              {cheapest.comparable > eachResult.total
+                ? `${eur(cheapest.comparable - eachResult.total)} cheaper than the best single store, but means buying across ${splitStopCount} stores.`
+                : `Same as the best single store here -- everything's already cheapest at ${cheapest.name}.`}
+              {eachResult.unpricedCount > 0
+                ? ` ${eachResult.unpricedCount} item${eachResult.unpricedCount === 1 ? "" : "s"} not priced anywhere right now.`
+                : ""}
+            </Text>
+          </View>
+          <Pressable onPress={() => setShowBreakdown((v) => !v)} style={styles.compareBreakdownToggle}>
+            <Text style={styles.compareBreakdownToggleText}>
+              {showBreakdown ? "Hide" : "Show"} item-by-item breakdown ▾
+            </Text>
+          </Pressable>
+          {showBreakdown && (
+            <CompareBreakdown rows={buildBreakdownRows(items, (item) => item.cheapest)} />
+          )}
+        </ScrollView>
+      )}
+
+      {strategy === "two" && (
+        <ScrollView
+          contentContainerStyle={styles.listContent}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        >
+          {twoResult ? (
+            <>
+              <View style={styles.compareSavingCard}>
+                <Text style={styles.compareSavingLabel}>
+                  {twoResult.storeA.name} + {twoResult.storeB.name}
+                </Text>
+                <Text style={styles.compareSavingValue}>{eur(twoResult.total)}</Text>
+                <Text style={styles.compareSavingNote}>
+                  {cheapest.comparable > twoResult.total
+                    ? `${eur(cheapest.comparable - twoResult.total)} cheaper than the best single store, for one extra stop.`
+                    : `Same as the best single store -- a second stop wouldn't save anything right now.`}
+                  {twoResult.total > eachResult.total
+                    ? ` ${eur(twoResult.total - eachResult.total)} more than buying every item at its own cheapest store.`
+                    : ""}
+                </Text>
+              </View>
+              <Pressable onPress={() => setShowBreakdown((v) => !v)} style={styles.compareBreakdownToggle}>
+                <Text style={styles.compareBreakdownToggleText}>
+                  {showBreakdown ? "Hide" : "Show"} item-by-item breakdown ▾
+                </Text>
+              </Pressable>
+              {showBreakdown && (
+                <CompareBreakdown
+                  rows={buildBreakdownRows(items, (item) =>
+                    resolveItemForStorePair(item, twoResult.storeA, twoResult.storeB)
+                  )}
+                />
+              )}
+            </>
+          ) : (
+            <Text style={styles.emptyText}>Need at least 2 real stores to compare a pair.</Text>
+          )}
+        </ScrollView>
+      )}
+
+      {splitStopCount > 1 && (
+        <View style={styles.bottomBarWrap}>
+          <Pressable onPress={onSplit} style={styles.bottomBarButton}>
+            <Text style={styles.bottomBarButtonText}>
+              Split into {splitStopCount} store lists
+            </Text>
+            <Text style={styles.bottomBarArrow}>→</Text>
+          </Pressable>
+        </View>
+      )}
+    </View>
+  );
+}
+
+// ============================================================================
+// "Store lists" screen
+// ============================================================================
+//
+// Compare answers "what if I bought everything at ONE store" -- this
+// answers the other real question: if you're willing to make more than one
+// stop, buying each item wherever it's individually cheapest, what does
+// each stop's list actually look like? Same underlying per-item data as
+// Compare (`item.cheapest`, already resolved by the API) -- just grouped
+// by store instead of ranked as whole-basket totals. Reached from
+// Compare's "Split into N store lists" button, mirroring the original
+// clickable prototype's own flow (that button led to this exact screen
+// there too). Only offered when splitting would actually involve more
+// than one store -- if everything's cheapest at the same single store,
+// Compare's own ranking already tells you that and there's nothing to
+// split.
+
+function computeStoreLists(items) {
+  const byStore = {};
+  let unpriced = 0;
+
+  items.forEach((item) => {
+    if (!item.cheapest) {
+      unpriced += 1;
+      return; // nothing anywhere has a price for this right now -- it
+               // can't be assigned to any store's list.
+    }
+    const store = item.cheapest;
+    const lineTotal = store.price * item.quantity;
+    if (!byStore[store.store_id]) {
+      byStore[store.store_id] = {
+        storeId: store.store_id,
+        name: store.store_name,
+        shortCode: store.short_code,
+        color: store.color,
+        items: [],
+        total: 0,
+      };
+    }
+    byStore[store.store_id].items.push({ ...item, lineTotal });
+    byStore[store.store_id].total += lineTotal;
+  });
+
+  const groups = Object.values(byStore).sort((a, b) => b.total - a.total);
+  const maxTotal = groups.reduce((m, g) => Math.max(m, g.total), 0);
+  return { groups, maxTotal, unpriced };
+}
+
+function StoreListCard({ group, maxTotal, checkedCount, onOpen }) {
+  const preview = group.items.map((it) => it.category).join(", ");
+  const allChecked = checkedCount >= group.items.length;
+  return (
+    <Pressable style={styles.storeListCard} onPress={onOpen}>
+      <View style={styles.storeListTop}>
+        <View style={[styles.storeListChip, { backgroundColor: group.color }]}>
+          <Text style={styles.storeListChipText}>{group.shortCode}</Text>
+        </View>
+        <View style={styles.storeListMain}>
+          <Text style={styles.storeListName}>{group.name}</Text>
+          <Text style={styles.storeListMeta}>
+            {allChecked
+              ? "All done ✓"
+              : checkedCount > 0
+              ? `${checkedCount} of ${group.items.length} checked`
+              : `${group.items.length} item${group.items.length === 1 ? "" : "s"}`}
+          </Text>
+        </View>
+        <Text style={styles.storeListTotal}>{eur(group.total)}</Text>
+      </View>
+      <View style={styles.compareBarTrack}>
+        <View
+          style={[
+            styles.compareBarFill,
+            {
+              width: `${maxTotal > 0 ? Math.max(6, (group.total / maxTotal) * 100) : 6}%`,
+              backgroundColor: group.color,
+            },
+          ]}
+        />
+      </View>
+      <Text style={styles.storeListPreview} numberOfLines={2}>
+        {preview}
+      </Text>
+      <Text style={styles.storeListOpenHint}>
+        {allChecked ? "Tap to review" : "Tap to start shopping here →"}
+      </Text>
+    </Pressable>
+  );
+}
+
+function StoreListsScreen({ items, checkedItemIds, onBack, onOpenShopping }) {
+  const { groups, maxTotal, unpriced } = useMemo(() => computeStoreLists(items), [items]);
+
+  return (
+    <View style={styles.screen}>
+      <View style={styles.subHeader}>
+        <Pressable onPress={onBack} style={styles.backBtn}>
+          <Text style={styles.backBtnText}>‹</Text>
+        </Pressable>
+        <View style={styles.subHeaderText}>
+          <Text style={styles.title}>Store lists</Text>
+          <Text style={styles.subtitle}>
+            {groups.length} stop{groups.length === 1 ? "" : "s"} · each item at its own cheapest store
+          </Text>
+        </View>
+      </View>
+
+      <FlatList
+        data={groups}
+        keyExtractor={(g) => g.storeId}
+        contentContainerStyle={styles.listContent}
+        renderItem={({ item: group }) => (
+          <StoreListCard
+            group={group}
+            maxTotal={maxTotal}
+            checkedCount={group.items.filter((it) => checkedItemIds.has(it.item_id)).length}
+            onOpen={() => onOpenShopping(group.storeId)}
+          />
+        )}
+        ListEmptyComponent={
+          <Text style={styles.emptyText}>Nothing to split yet -- add items with a real price first.</Text>
+        }
+        ListFooterComponent={
+          unpriced > 0 ? (
+            <Text style={styles.storeListFootnote}>
+              {unpriced} item{unpriced === 1 ? "" : "s"} on your list currently{" "}
+              {unpriced === 1 ? "has" : "have"} no price anywhere, so{" "}
+              {unpriced === 1 ? "it isn't" : "they aren't"} in any list below.
+            </Text>
+          ) : null
+        }
+      />
+    </View>
+  );
+}
+
+// ============================================================================
+// "Shopping mode" screen
+// ============================================================================
+//
+// Reached by tapping a store card on Store lists -- a real checklist for
+// that one stop: tick items off as they land in the trolley, watch the
+// running total update, and jump straight to the next unfinished store
+// without detouring back through Store lists first. Checked-off state now
+// survives closing the app mid-trip (see `checkedItemIds` in App(), and
+// `loadCheckedItemIds`/`saveCheckedItemIds` near DEVICE_ID_STORAGE_KEY) --
+// it used to live only in memory, which was a real, known gap; persisting
+// it was the second of three agreed steps toward a permanent personal-use
+// install (see PROGRESS.md). Deliberately no barcode scanning and no "fix
+// this price" / "swap store" actions here, unlike the original prototype
+// -- those need a camera and the price-correction workflow respectively,
+// neither of which exist yet (see PROGRESS.md's "Not started" section).
+
+function ShoppingRow({ item, checked, onToggle }) {
+  return (
+    <Pressable
+      onPress={onToggle}
+      style={[styles.shoppingRow, checked && styles.shoppingRowChecked]}
+    >
+      <View style={[styles.shoppingCheckbox, checked && styles.shoppingCheckboxChecked]}>
+        {checked && <Text style={styles.shoppingCheckMark}>✓</Text>}
+      </View>
+      <View style={styles.rowMain}>
+        <Text style={[styles.itemName, checked && styles.shoppingTextChecked]}>
+          {item.category}
+        </Text>
+        <Text style={[styles.itemSubMuted, checked && styles.shoppingTextChecked]}>
+          Qty {item.quantity}
+        </Text>
+      </View>
+      <Text style={[styles.price, checked && styles.shoppingTextChecked]}>{eur(item.lineTotal)}</Text>
+    </Pressable>
+  );
+}
+
+function ShoppingScreen({ items, checkedItemIds, onToggleItem, storeId, onSwitchStore, onBack }) {
+  const { groups } = useMemo(() => computeStoreLists(items), [items]);
+  const group = groups.find((g) => g.storeId === storeId);
+
+  if (!group) {
+    // The store this shopping trip was for no longer has any items
+    // assigned to it (removed, or its cheapest store changed since) --
+    // nothing left to shop here, so give a way back rather than an empty
+    // screen with no exit.
+    return (
+      <View style={styles.screen}>
+        <View style={styles.subHeader}>
+          <Pressable onPress={onBack} style={styles.backBtn}>
+            <Text style={styles.backBtnText}>‹</Text>
+          </Pressable>
+          <View style={styles.subHeaderText}>
+            <Text style={styles.title}>Shopping</Text>
+            <Text style={styles.subtitle}>This store's list is empty now</Text>
+          </View>
+        </View>
+        <Text style={styles.emptyText}>
+          Everything that was here has moved or been removed -- back to Store lists to see what's left.
+        </Text>
+      </View>
+    );
+  }
+
+  const checkedCount = group.items.filter((it) => checkedItemIds.has(it.item_id)).length;
+  const totalCount = group.items.length;
+  const pct = totalCount > 0 ? checkedCount / totalCount : 0;
+  const spent = group.items
+    .filter((it) => checkedItemIds.has(it.item_id))
+    .reduce((sum, it) => sum + it.lineTotal, 0);
+
+  const nextUnfinished = groups.find(
+    (g) => g.storeId !== group.storeId && g.items.some((it) => !checkedItemIds.has(it.item_id))
+  );
+
+  return (
+    <View style={styles.screen}>
+      <View style={styles.subHeader}>
+        <Pressable onPress={onBack} style={styles.backBtn}>
+          <Text style={styles.backBtnText}>‹</Text>
+        </Pressable>
+        <View style={styles.subHeaderText}>
+          <Text style={styles.title}>{group.name}</Text>
+          <Text style={styles.subtitle}>
+            {checkedCount} of {totalCount} checked · {eur(spent)} of {eur(group.total)}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.shoppingProgressWrap}>
+        <View style={styles.shoppingProgressTrack}>
+          <View
+            style={[
+              styles.shoppingProgressFill,
+              { flex: Math.max(pct, 0.04), backgroundColor: group.color },
+            ]}
+          />
+          {pct < 1 && <View style={{ flex: 1 - pct }} />}
+        </View>
+      </View>
+
+      {groups.length > 1 && (
+        <View style={styles.shoppingSwitcherRow}>
+          {groups.map((g) => {
+            const active = g.storeId === group.storeId;
+            const gDone = g.items.every((it) => checkedItemIds.has(it.item_id));
+            return (
+              <Pressable
+                key={g.storeId}
+                onPress={() => onSwitchStore(g.storeId)}
+                style={[
+                  styles.shoppingSwitcherChip,
+                  { borderColor: g.color },
+                  active && { backgroundColor: g.color },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.shoppingSwitcherChipText,
+                    active && styles.shoppingSwitcherChipTextActive,
+                  ]}
+                >
+                  {g.shortCode}
+                  {gDone ? " ✓" : ""}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      )}
+
+      <FlatList
+        data={group.items}
+        keyExtractor={(it) => it.item_id}
+        contentContainerStyle={styles.listContent}
+        renderItem={({ item }) => (
+          <ShoppingRow
+            item={item}
+            checked={checkedItemIds.has(item.item_id)}
+            onToggle={() => onToggleItem(item.item_id)}
+          />
+        )}
+        ItemSeparatorComponent={() => <View style={styles.separator} />}
+      />
+
+      <View style={styles.bottomBarWrap}>
+        {nextUnfinished ? (
+          <Pressable onPress={() => onSwitchStore(nextUnfinished.storeId)} style={styles.bottomBarButton}>
+            <Text style={styles.bottomBarButtonText}>Next: {nextUnfinished.name}</Text>
+            <Text style={styles.bottomBarArrow}>→</Text>
+          </Pressable>
+        ) : (
+          <Pressable onPress={onBack} style={styles.bottomBarButton}>
+            <Text style={styles.bottomBarButtonText}>
+              {checkedCount === totalCount ? "Done -- back to store lists" : "Back to store lists"}
+            </Text>
+            <Text style={styles.bottomBarArrow}>→</Text>
+          </Pressable>
+        )}
+      </View>
+    </View>
+  );
+}
+
+// ============================================================================
+// Navigation + top-level app
+// ============================================================================
+//
+// Three real destinations sit on a bottom tab bar: "My list", "Browse",
+// "Compare". "Item detail", "Store lists" and "Shopping mode" are NOT nested
+// inside those tabs -- they're screens on one root-level stack that sits
+// ABOVE the whole tab bar (the tab bar itself lives on a single "Tabs"
+// screen, `TabsScreen` below). That's a deliberate fix, not the original
+// design: an earlier version nested a small stack INSIDE the "My list" and
+// "Compare" tabs and hid the tab bar dynamically (by matching the nested
+// stack's currently-focused route name) whenever one of those pushed
+// screens was open. That version had a real bug -- going Store lists <->
+// Shopping mode worked, but there was no reliable way back out to the
+// three main tabs, because the tab bar's visibility depended on correctly
+// re-deriving the focused nested route on every render, which is fragile.
+// Putting these screens on the ROOT stack instead removes that failure
+// mode entirely: the tab bar physically doesn't exist outside the "Tabs"
+// screen, so there's nothing to get stuck in a wrong state -- going back
+// is always just one root-stack `goBack()` away from any of these screens,
+// and it lands you back on whichever tab you left, exactly as it was.
+// `navigation.navigate("StoreLists")` etc. called from inside a tab still
+// works reaching a root-level screen -- React Navigation walks up the
+// navigator tree to find a screen name that isn't in the current
+// navigator, so no extra plumbing is needed at the call sites below.
+//
+// All the app's real state (the list, categories, stores, loading/busy
+// flags, the in-memory checked-off set) lives in `App()`, same as before,
+// and reaches every screen through `AppStateContext` rather than being
+// passed down as navigator props. This is deliberate, not just a style
+// choice: a `Tab.Screen`/`Stack.Screen`'s `component` must be a STABLE
+// function reference, or React Navigation treats it as a brand new screen
+// on every render and remounts it -- which, here, would mean getting
+// kicked back to the top of a stack every time an item's quantity changed
+// mid-navigation. Context lets these route components stay fixed,
+// module-level functions while still always reading the latest state.
+
+const AppStateContext = createContext(null);
+const useAppState = () => useContext(AppStateContext);
+
+const RootStack = createNativeStackNavigator();
+const Tab = createBottomTabNavigator();
+
+const TAB_BAR_STYLE = { backgroundColor: "#fcfcfb", borderTopColor: "#e1e0d9" };
+
+function ListRoute({ navigation }) {
+  const {
+    items,
+    categories,
+    loading,
+    refreshing,
+    busyItemId,
+    errorMessage,
+    listLabel,
+    onSetListLabel,
+    onRefresh,
+    handleAdd,
+    handleQuantityChange,
+    handleRemove,
+  } = useAppState();
+  return (
+    <ListScreen
+      items={items}
+      categories={categories}
+      loading={loading}
+      refreshing={refreshing}
+      busyItemId={busyItemId}
+      errorMessage={errorMessage}
+      listLabel={listLabel}
+      onSetListLabel={onSetListLabel}
+      onRefresh={onRefresh}
+      onAdd={handleAdd}
+      onInc={(it) => handleQuantityChange(it, it.quantity + 1)}
+      onDec={(it) => handleQuantityChange(it, it.quantity - 1)}
+      onRemove={handleRemove}
+      onOpenDetail={(item) => navigation.navigate("ItemDetail", { itemId: item.item_id })}
+      onBrowse={() => navigation.navigate("Browse")}
+      onGoToCompare={() => navigation.navigate("CompareTab")}
+    />
+  );
+}
+
+function ItemDetailRoute({ navigation, route }) {
+  const { items } = useAppState();
+  const item = items.find((it) => it.item_id === route.params.itemId);
+
+  useEffect(() => {
+    // Covers removing an item (or a refresh dropping it, e.g. it stopped
+    // being priced anywhere) while its detail screen happens to be open --
+    // rather than showing a detail screen for an item that no longer
+    // exists, just go back to "My list".
+    if (!item) navigation.goBack();
+  }, [item, navigation]);
+
+  if (!item) return null;
+  return <ItemDetailScreen item={item} onBack={() => navigation.goBack()} />;
+}
+
+function BrowseRoute() {
+  const { categories, items, loading, refreshing, onRefresh, handleAdd, busyCategory } = useAppState();
+  return (
+    <BrowseScreen
+      categories={categories}
+      items={items}
+      loading={loading}
+      refreshing={refreshing}
+      onRefresh={onRefresh}
+      onAdd={handleAdd}
+      busyCategory={busyCategory}
+    />
+  );
+}
+
+function CompareRoute({ navigation }) {
+  const { items, stores, loading, refreshing, onRefresh } = useAppState();
+  return (
+    <CompareScreen
+      items={items}
+      stores={stores}
+      loading={loading}
+      refreshing={refreshing}
+      onRefresh={onRefresh}
+      onSplit={() => navigation.navigate("StoreLists")}
+    />
+  );
+}
+
+function StoreListsRoute({ navigation }) {
+  const { items, checkedItemIds } = useAppState();
+  return (
+    <StoreListsScreen
+      items={items}
+      checkedItemIds={checkedItemIds}
+      onBack={() => navigation.goBack()}
+      onOpenShopping={(storeId) => navigation.navigate("Shopping", { storeId })}
+    />
+  );
+}
+
+function ShoppingRoute({ navigation, route }) {
+  const { items, checkedItemIds, handleToggleChecked } = useAppState();
+  return (
+    <ShoppingScreen
+      items={items}
+      checkedItemIds={checkedItemIds}
+      onToggleItem={handleToggleChecked}
+      storeId={route.params.storeId}
+      onSwitchStore={(storeId) => navigation.setParams({ storeId })}
+      // goBack(), not navigate("StoreLists") -- Shopping is always pushed
+      // directly on top of Store lists on the root stack (see the comment
+      // above), so popping one level is both simpler and exactly right,
+      // the same way it is for every other back arrow in this file.
+      onBack={() => navigation.goBack()}
+    />
+  );
+}
+
+// Simple tab-bar icons drawn with plain Views -- deliberately NOT an icon
+// font/library (e.g. @expo/vector-icons). Those need to be resolved and
+// bundled by Metro at build time, and this project has already been bitten
+// twice by exactly that class of problem (the SDK 51->54 drift, the
+// missing babel-preset-expo dependency) -- both invisible on Snack and
+// only surfacing as a broken/blank icon (or a failed build) on a real EAS
+// build. A handful of Views has no version to drift and nothing to fail to
+// resolve.
+function TabIcon({ shape, color, size = 22 }) {
+  if (shape === "list") {
+    return (
+      <View style={{ width: size, height: size, justifyContent: "center", gap: 3 }}>
+        <View style={{ height: 2.5, borderRadius: 2, backgroundColor: color, width: "100%" }} />
+        <View style={{ height: 2.5, borderRadius: 2, backgroundColor: color, width: "78%" }} />
+        <View style={{ height: 2.5, borderRadius: 2, backgroundColor: color, width: "55%" }} />
+      </View>
+    );
+  }
+  if (shape === "browse") {
+    return (
+      <View style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
+        <View
+          style={{
+            width: size * 0.62,
+            height: size * 0.62,
+            borderRadius: size * 0.31,
+            borderWidth: 2.2,
+            borderColor: color,
+          }}
+        />
+        <View
+          style={{
+            position: "absolute",
+            width: size * 0.34,
+            height: 2.4,
+            backgroundColor: color,
+            borderRadius: 2,
+            bottom: size * 0.08,
+            right: size * 0.04,
+            transform: [{ rotate: "45deg" }],
+          }}
+        />
+      </View>
+    );
+  }
+  // "compare" -- a little bar chart
+  return (
+    <View
+      style={{
+        width: size,
+        height: size,
+        flexDirection: "row",
+        alignItems: "flex-end",
+        justifyContent: "center",
+        gap: 3,
+      }}
+    >
+      <View style={{ width: size * 0.22, height: size * 0.5, borderRadius: 2, backgroundColor: color }} />
+      <View style={{ width: size * 0.22, height: size * 0.85, borderRadius: 2, backgroundColor: color }} />
+      <View style={{ width: size * 0.22, height: size * 0.34, borderRadius: 2, backgroundColor: color }} />
+    </View>
+  );
+}
+
+const TAB_ICON_SHAPES = { ListTab: "list", Browse: "browse", CompareTab: "compare" };
+
+// The screen that actually renders the three-tab bar. Kept as its own
+// stable, module-level component (not inlined into App()'s return) for the
+// same reason every *Route component above is -- registered as a
+// `RootStack.Screen`'s `component`, not `children`.
+function TabsScreen() {
+  return (
+    <Tab.Navigator
+      screenOptions={({ route }) => ({
+        headerShown: false,
+        tabBarActiveTintColor: "#0ca30c",
+        tabBarInactiveTintColor: "#898781",
+        tabBarStyle: TAB_BAR_STYLE,
+        tabBarIcon: ({ color, size }) => (
+          <TabIcon shape={TAB_ICON_SHAPES[route.name]} color={color} size={size} />
+        ),
+      })}
+    >
+      <Tab.Screen name="ListTab" component={ListRoute} options={{ tabBarLabel: "My list" }} />
+      <Tab.Screen name="Browse" component={BrowseRoute} />
+      <Tab.Screen name="CompareTab" component={CompareRoute} options={{ tabBarLabel: "Compare" }} />
+    </Tab.Navigator>
+  );
+}
+
+export default function App() {
+  const [deviceId, setDeviceId] = useState(null);
+  const [items, setItems] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [stores, setStores] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [busyItemId, setBusyItemId] = useState(null);
+  const [busyCategory, setBusyCategory] = useState(null);
+  const [errorMessage, setErrorMessage] = useState(null);
+  const [checkedItemIds, setCheckedItemIds] = useState(() => new Set());
+  // True once the persisted checked-items set has been read back from
+  // AsyncStorage (or confirmed there was none). Guards the save effect
+  // below so it can't fire with the initial empty Set and overwrite a real
+  // saved one before the restore has actually happened.
+  const [checkedItemsHydrated, setCheckedItemsHydrated] = useState(false);
+  const [listLabel, setListLabel] = useState(DEFAULT_LIST_LABEL);
+  // Same hydration-guard pattern as checkedItemsHydrated above, for the
+  // same reason: without it, the save effect would fire once on mount with
+  // the initial default and overwrite a real saved label before the
+  // restore from AsyncStorage has happened.
+  const [listLabelHydrated, setListLabelHydrated] = useState(false);
+
+  async function loadEverything(id) {
+    // Deliberately NOT Promise.all -- these are two independent pieces of
+    // data (the list, and the category picker), and one failing shouldn't
+    // throw away the other's already-successful result. Each one reports
+    // its own failure into the same banner; if both fail, the second
+    // message simply overwrites the first, which is fine since fixing
+    // either one (retrying) reloads both anyway.
+    setErrorMessage(null);
+    try {
+      const listResult = await fetchJson(`/lists/${id}`);
+      setItems(listResult.items);
+    } catch (err) {
+      setErrorMessage(err.message || "Couldn't load your list");
+    }
+    try {
+      const categoriesResult = await fetchJson(`/categories`);
+      setCategories(categoriesResult.categories);
+    } catch (err) {
+      setErrorMessage(err.message || "Couldn't load categories");
+    }
+    try {
+      const storesResult = await fetchJson(`/stores`);
+      setStores(storesResult.stores);
+    } catch (err) {
+      setErrorMessage(err.message || "Couldn't load stores");
+    }
+  }
+
+  useEffect(() => {
+    (async () => {
+      const id = await getDeviceId();
+      setDeviceId(id);
+      // Restore before marking hydrated -- see checkedItemsHydrated's
+      // comment above for why the save effect below must not run first.
+      const restoredCheckedItemIds = await loadCheckedItemIds(id);
+      setCheckedItemIds(restoredCheckedItemIds);
+      setCheckedItemsHydrated(true);
+      const restoredListLabel = await loadListLabel(id);
+      setListLabel(restoredListLabel);
+      setListLabelHydrated(true);
+      await loadEverything(id);
+      setLoading(false);
+    })();
+  }, []);
+
+  // Prunes checked-off ids for items that no longer exist (removed from
+  // the list, or dropped by a refresh) -- otherwise a stale id lingers in
+  // storage forever, harmlessly but pointlessly. Runs whenever the list
+  // itself changes; a no-op (returns the same Set) when nothing needs
+  // pruning, so it doesn't cause an extra save on every ordinary refresh.
+  useEffect(() => {
+    if (!checkedItemsHydrated) return;
+    setCheckedItemIds((prev) => {
+      const validIds = new Set(items.map((it) => it.item_id));
+      let changed = false;
+      const next = new Set();
+      prev.forEach((id) => {
+        if (validIds.has(id)) {
+          next.add(id);
+        } else {
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [items, checkedItemsHydrated]);
+
+  // Saves the checked-off set on every real change, once hydrated. Cheap
+  // enough (a handful of ids, JSON-stringified) not to worry about
+  // debouncing -- ticking a checkbox is nowhere near fast enough for this
+  // to be a meaningful volume of writes.
+  useEffect(() => {
+    if (!deviceId || !checkedItemsHydrated) return;
+    saveCheckedItemIds(deviceId, checkedItemIds);
+  }, [deviceId, checkedItemsHydrated, checkedItemIds]);
+
+  // Saves the list label on every real change, once hydrated -- mirrors
+  // the checked-items save effect above.
+  useEffect(() => {
+    if (!deviceId || !listLabelHydrated) return;
+    saveListLabel(deviceId, listLabel);
+  }, [deviceId, listLabelHydrated, listLabel]);
+
+  async function onRefresh() {
+    if (!deviceId) return;
+    setRefreshing(true);
+    await loadEverything(deviceId);
+    setRefreshing(false);
+  }
+
+  async function handleAdd(category) {
+    if (!deviceId) return;
+    setBusyCategory(category);
+    try {
+      setErrorMessage(null);
+      const result = await fetchJson(`/lists/${deviceId}/items`, {
+        method: "POST",
+        body: JSON.stringify({ category, quantity: 1 }),
+      });
+      setItems(result.items);
+    } catch (err) {
+      setErrorMessage(err.message || "Couldn't add that item");
+    } finally {
+      setBusyCategory(null);
+    }
+  }
+
+  async function handleQuantityChange(item, nextQuantity) {
+    if (!deviceId) return;
+    setBusyItemId(item.item_id);
+    try {
+      setErrorMessage(null);
+      if (nextQuantity <= 0) {
+        const result = await fetchJson(`/lists/${deviceId}/items/${item.item_id}`, {
+          method: "DELETE",
+        });
+        setItems(result.items);
+      } else {
+        const result = await fetchJson(`/lists/${deviceId}/items/${item.item_id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ quantity: nextQuantity }),
+        });
+        setItems(result.items);
+      }
+    } catch (err) {
+      setErrorMessage(err.message || "Couldn't update that item");
+    } finally {
+      setBusyItemId(null);
+    }
+  }
+
+  async function handleRemove(item) {
+    if (!deviceId) return;
+    setBusyItemId(item.item_id);
+    try {
+      setErrorMessage(null);
+      const result = await fetchJson(`/lists/${deviceId}/items/${item.item_id}`, {
+        method: "DELETE",
+      });
+      setItems(result.items);
+    } catch (err) {
+      setErrorMessage(err.message || "Couldn't remove that item");
+    } finally {
+      setBusyItemId(null);
+    }
+  }
+
+  function handleToggleChecked(itemId) {
+    setCheckedItemIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(itemId)) {
+        next.delete(itemId);
+      } else {
+        next.add(itemId);
+      }
+      return next;
+    });
+  }
+
+  const appState = {
+    items,
+    categories,
+    stores,
+    loading,
+    refreshing,
+    busyItemId,
+    busyCategory,
+    errorMessage,
+    checkedItemIds,
+    listLabel,
+    onSetListLabel: setListLabel,
+    onRefresh,
+    handleAdd,
+    handleQuantityChange,
+    handleRemove,
+    handleToggleChecked,
+  };
+
+  return (
+    // SafeAreaProvider has to be the outermost wrapper here -- React
+    // Navigation's bottom tab bar reads its own bottom inset from
+    // `react-native-safe-area-context` (via `useSafeAreaInsets`) to size
+    // and pad itself correctly against the real device safe area. Without
+    // a `SafeAreaProvider` ancestor that hook has nothing real to read and
+    // falls back to bad defaults -- which is exactly what a tab bar that
+    // looks "half cut off" at the bottom means. `SafeAreaView` right below
+    // is ALSO imported from "react-native-safe-area-context" (see the
+    // import comment above) so it correctly pads the header away from the
+    // status bar on Android too, not just iOS.
+    <SafeAreaProvider>
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar barStyle="dark-content" />
+        <AppStateContext.Provider value={appState}>
+          <NavigationContainer>
+            <RootStack.Navigator screenOptions={{ headerShown: false }}>
+              <RootStack.Screen name="Tabs" component={TabsScreen} />
+              <RootStack.Screen name="ItemDetail" component={ItemDetailRoute} />
+              <RootStack.Screen name="StoreLists" component={StoreListsRoute} />
+              <RootStack.Screen name="Shopping" component={ShoppingRoute} />
+            </RootStack.Navigator>
+          </NavigationContainer>
+        </AppStateContext.Provider>
+      </SafeAreaView>
+    </SafeAreaProvider>
+  );
+}
+
+const styles = StyleSheet.create({
+  safeArea: { flex: 1, backgroundColor: "#fcfcfb" },
+  screen: { flex: 1 },
+  header: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 8 },
+  headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
+  headerLeft: { flexShrink: 1 },
+  headerCount: { alignItems: "flex-end", marginLeft: 12 },
+  headerCountNumber: { fontSize: 26, fontWeight: "700", color: "#0b0b0b", lineHeight: 28 },
+  headerCountLabel: { fontSize: 12, color: "#52514e", marginTop: 1 },
+  title: { fontSize: 24, fontWeight: "600", color: "#0b0b0b" },
+  subtitle: { fontSize: 13, color: "#52514e", marginTop: 2 },
+  subtitleMuted: { fontSize: 11.5, color: "#898781", marginTop: 2 },
+  listLabel: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#0ca30c",
+    letterSpacing: 0.6,
+    marginTop: 4,
+  },
+  listLabelInput: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#0ca30c",
+    letterSpacing: 0.6,
+    marginTop: 4,
+    padding: 0,
+    borderBottomWidth: 1,
+    borderBottomColor: "#0ca30c",
+    alignSelf: "flex-start",
+    minWidth: 80,
+  },
+
+  addWrap: { paddingHorizontal: 20, paddingBottom: 6 },
+  addInputRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#e1e0d9",
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  addPlus: { fontSize: 16, fontWeight: "600", color: "#0ca30c" },
+  addInput: { flex: 1, fontSize: 15, color: "#0b0b0b" },
+  browseBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+    backgroundColor: "#f1f0ec",
+  },
+  browseBtnText: { fontSize: 12.5, fontWeight: "600", color: "#52514e" },
+  compareCta: {
+    // Deliberately a neutral color, not the app's green -- the owner wants
+    // to hold off on finalizing colors app-wide until the design overall is
+    // settled, rather than this one button jumping ahead of that decision.
+    marginHorizontal: 20,
+    marginBottom: 14,
+    marginTop: 4,
+    backgroundColor: "#2b2a27",
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: "center",
+  },
+  compareCtaText: { color: "#ffffff", fontSize: 14.5, fontWeight: "600" },
+  suggestBox: {
+    marginTop: 6,
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#e1e0d9",
+    borderRadius: 14,
+    overflow: "hidden",
+  },
+  suggestRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#f1f0ec",
+  },
+  suggestRowPressed: { backgroundColor: "#f6f5f1" },
+  suggestName: { fontSize: 14, fontWeight: "500", color: "#0b0b0b" },
+  suggestHint: { fontSize: 11, color: "#898781" },
+
+  errorBanner: {
+    marginHorizontal: 20,
+    marginBottom: 6,
+    backgroundColor: "#fdecec",
+    borderColor: "#f3c3c3",
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  errorBannerText: { color: "#d03b3b", fontSize: 12.5 },
+
+  centerFill: { flex: 1, alignItems: "center", justifyContent: "center" },
+
+  listContent: { paddingHorizontal: 20, paddingBottom: 24, paddingTop: 4 },
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#e1e0d9",
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingRight: 10,
+    overflow: "hidden",
+  },
+  ribbon: { width: 5, alignSelf: "stretch", marginRight: 12 },
+  rowMain: { flex: 1, minWidth: 0 },
+  itemName: { fontSize: 15, fontWeight: "500", color: "#0b0b0b" },
+  itemSub: { marginTop: 4, fontSize: 11.5, color: "#52514e" },
+  itemSubMuted: { marginTop: 4, fontSize: 11.5, color: "#898781" },
+  priceCol: { alignItems: "flex-end", marginRight: 8 },
+  price: { fontSize: 15, fontWeight: "700", color: "#0b0b0b" },
+  savingsText: { fontSize: 10.5, fontWeight: "600", color: "#0ca30c", marginTop: 1 },
+  qtyRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 6 },
+  qtyBtn: {
+    width: 26,
+    height: 26,
+    borderRadius: 8,
+    backgroundColor: "#f1f0ec",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  qtyBtnText: { fontSize: 15, fontWeight: "600", color: "#0b0b0b" },
+  qtyValue: { fontSize: 13, fontWeight: "600", color: "#0b0b0b", minWidth: 14, textAlign: "center" },
+  removeBtn: { padding: 8 },
+  removeBtnText: { fontSize: 14, color: "#898781" },
+
+  deptChipsWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    paddingHorizontal: 20,
+    gap: 8,
+    marginBottom: 10,
+  },
+  deptChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#e1e0d9",
+  },
+  deptChipActive: { backgroundColor: "#0b0b0b", borderColor: "#0b0b0b" },
+  deptChipText: { fontSize: 12.5, fontWeight: "600", color: "#52514e" },
+  deptChipTextActive: { color: "#ffffff" },
+
+  browseRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#e1e0d9",
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  browseAddBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 10,
+    backgroundColor: "#0b0b0b",
+  },
+  browseAddBtnActive: { backgroundColor: "#e7f6e7" },
+  browseAddBtnText: { fontSize: 12.5, fontWeight: "600", color: "#ffffff" },
+  browseAddBtnTextActive: { color: "#0ca30c" },
+
+  separator: { height: 9 },
+  emptyText: {
+    textAlign: "center",
+    marginTop: 40,
+    fontSize: 14,
+    color: "#898781",
+  },
+
+  compareSavingCard: {
+    backgroundColor: "#0b0b0b",
+    borderRadius: 16,
+    padding: 18,
+    marginBottom: 14,
+  },
+  compareSavingLabel: { fontSize: 11, color: "rgba(255,255,255,0.6)", textTransform: "uppercase", letterSpacing: 0.6 },
+  compareSavingValue: { fontSize: 30, fontWeight: "700", color: "#ffffff", marginTop: 6 },
+  compareSavingNote: { fontSize: 12.5, color: "rgba(255,255,255,0.7)", marginTop: 8, lineHeight: 17 },
+
+  strategyToggle: {
+    flexDirection: "row",
+    marginHorizontal: 20,
+    marginBottom: 12,
+    backgroundColor: "#f1f0ec",
+    borderRadius: 12,
+    padding: 3,
+  },
+  strategyOption: { flex: 1, paddingVertical: 8, borderRadius: 9, alignItems: "center" },
+  strategyOptionActive: { backgroundColor: "#ffffff" },
+  strategyOptionText: { fontSize: 12, fontWeight: "600", color: "#898781" },
+  strategyOptionTextActive: { color: "#0b0b0b" },
+
+  compareExpandHint: { fontSize: 11, fontWeight: "600", color: "#898781", marginTop: 8 },
+  compareBreakdownToggle: { paddingVertical: 4, marginBottom: 4 },
+  compareBreakdownToggleText: { fontSize: 12.5, fontWeight: "600", color: "#0b0b0b" },
+  compareBreakdown: { marginTop: 10, gap: 8 },
+  compareBreakdownRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  compareBreakdownDot: { width: 8, height: 8, borderRadius: 4 },
+  compareBreakdownName: { flex: 1, minWidth: 0, fontSize: 12.5, color: "#0b0b0b" },
+  compareBreakdownStore: { fontSize: 11.5, color: "#52514e", maxWidth: 110 },
+  compareBreakdownStoreMuted: { fontSize: 11.5, color: "#898781", fontStyle: "italic" },
+  compareBreakdownPrice: { fontSize: 12.5, fontWeight: "600", color: "#0b0b0b", minWidth: 54, textAlign: "right" },
+
+  bottomBarWrap: {
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    paddingBottom: 8,
+    backgroundColor: "#fcfcfb",
+    borderTopWidth: 1,
+    borderTopColor: "#e1e0d9",
+  },
+  bottomBarButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 15,
+    paddingHorizontal: 18,
+    borderRadius: 14,
+    backgroundColor: "#0ca30c",
+  },
+  bottomBarButtonText: { fontSize: 15, fontWeight: "600", color: "#ffffff" },
+  bottomBarArrow: { fontSize: 16, fontWeight: "700", color: "#ffffff" },
+
+  subHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 8,
+  },
+  subHeaderText: { flex: 1, minWidth: 0 },
+  backBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: "#f1f0ec",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  backBtnText: { fontSize: 20, fontWeight: "600", color: "#0b0b0b", marginTop: -2 },
+
+  storeListCard: {
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#e1e0d9",
+    borderRadius: 16,
+    padding: 15,
+    marginBottom: 10,
+  },
+  storeListTop: { flexDirection: "row", alignItems: "center", marginBottom: 10 },
+  storeListChip: {
+    width: 38,
+    height: 38,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+  },
+  storeListChipText: { fontSize: 12, fontWeight: "700", color: "#ffffff" },
+  storeListMain: { flex: 1, minWidth: 0 },
+  storeListName: { fontSize: 16, fontWeight: "600", color: "#0b0b0b" },
+  storeListMeta: { fontSize: 11.5, color: "#898781", marginTop: 3 },
+  storeListTotal: { fontSize: 16, fontWeight: "700", color: "#0b0b0b" },
+  storeListPreview: { fontSize: 12, color: "#52514e", marginTop: 9, lineHeight: 17 },
+  storeListOpenHint: { fontSize: 11.5, fontWeight: "600", color: "#0ca30c", marginTop: 10 },
+  storeListFootnote: {
+    fontSize: 11.5,
+    color: "#898781",
+    marginTop: 4,
+    lineHeight: 16,
+  },
+
+  centerFillSmall: { paddingVertical: 24, alignItems: "center" },
+  sectionLabel: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#898781",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    marginTop: 20,
+    marginBottom: 9,
+  },
+
+  detailBestCard: {
+    backgroundColor: "#0b0b0b",
+    borderRadius: 16,
+    padding: 18,
+    alignItems: "flex-start",
+  },
+  detailBestLabel: {
+    fontSize: 10.5,
+    fontWeight: "600",
+    color: "rgba(255,255,255,0.55)",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+  },
+  detailBestPrice: { fontSize: 32, fontWeight: "700", color: "#ffffff", marginTop: 8 },
+  detailBestStore: { fontSize: 13, fontWeight: "500", color: "#60db89", marginTop: 6 },
+  detailBestFreshness: { fontSize: 11, color: "rgba(255,255,255,0.55)", marginTop: 4 },
+
+  detailOfferRow: {
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#e1e0d9",
+    borderRadius: 14,
+    paddingVertical: 11,
+    paddingHorizontal: 12,
+    marginBottom: 8,
+  },
+  detailOfferTop: { flexDirection: "row", alignItems: "center" },
+  detailOfferChip: {
+    width: 30,
+    height: 30,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 11,
+  },
+  detailOfferChipText: { fontSize: 10, fontWeight: "700", color: "#ffffff" },
+  detailOfferName: { flex: 1, fontSize: 14, fontWeight: "500", color: "#0b0b0b" },
+  detailOfferPrice: { fontSize: 15, fontWeight: "700", color: "#0b0b0b" },
+  detailOfferSource: { fontSize: 11, color: "#898781", marginTop: 6, marginLeft: 41 },
+  detailOfferMeta: { fontSize: 11, color: "#898781", marginTop: 2, marginLeft: 41 },
 
   historyCard: {
     backgroundColor: "#ffffff",
