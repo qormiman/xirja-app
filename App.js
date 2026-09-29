@@ -1920,8 +1920,14 @@ const styles = StyleSheet.create({
   removeBtn: { padding: 8 },
   removeBtnText: { fontSize: 14, color: "#898781" },
 
-  deptChipsRow: { flexGrow: 0, marginBottom: 10 },
-  deptChipsContent: { paddingHorizontal: 20, gap: 8 },
+  // Explicit height (not just intrinsic content sizing) -- a horizontal
+  // ScrollView left to size itself from its children can collapse to a
+  // sliver on Android, since its row-direction content container defaults
+  // to stretching children to a not-yet-determined cross-axis size. Fixed
+  // height plus `alignItems: "center"` on the content below avoids that
+  // collapse entirely instead of fighting it.
+  deptChipsRow: { flexGrow: 0, height: 44, marginBottom: 10 },
+  deptChipsContent: { paddingHorizontal: 20, gap: 8, alignItems: "center" },
   deptChip: {
     paddingHorizontal: 14,
     paddingVertical: 8,
