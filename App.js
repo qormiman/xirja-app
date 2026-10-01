@@ -33,6 +33,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Keyboard,
   Pressable,
@@ -87,6 +88,14 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 const API_BASE_URL = "https://xirja-backend.onrender.com";
 
 const REQUEST_TIMEOUT_MS = 45000; // see fetchJson()'s comment for why 45s
+
+// Shown on the new Settings screen (Task 8). Deliberately a plain hardcoded
+// constant rather than reading `app.json`'s `expo.version` via
+// `expo-constants` -- that would be one more native dependency added just
+// to avoid typing a number twice, which isn't worth it for something this
+// low-stakes. Keep this in sync with `"version"` in app.json by hand when
+// it changes.
+const APP_VERSION = "1.0.0";
 
 // ---------------------------------------------------------------------
 // On DEVICE_USER_ID: there's no real login system yet -- accounts are a
@@ -1498,7 +1507,7 @@ function StoreListCard({ group, maxTotal, checkedCount, onOpen }) {
   );
 }
 
-function StoreListsScreen({ items, checkedItemIds, onBack, onOpenShopping, onViewTripSummary }) {
+function StoreListsScreen({ items, checkedItemIds, onOpenShopping, onViewTripSummary }) {
   const { groups, maxTotal, unpriced } = useMemo(() => computeStoreLists(items), [items]);
   // Task 7: available any time from here, not just once a trip is fully
   // checked off (see ShoppingScreen's bottom bar for that second entry
@@ -1508,16 +1517,17 @@ function StoreListsScreen({ items, checkedItemIds, onBack, onOpenShopping, onVie
 
   return (
     <View style={styles.screen}>
-      <View style={styles.subHeader}>
-        <Pressable onPress={onBack} style={styles.backBtn}>
-          <Text style={styles.backBtnText}>‹</Text>
-        </Pressable>
-        <View style={styles.subHeaderText}>
-          <Text style={styles.title}>Store lists</Text>
-          <Text style={styles.subtitle}>
-            {groups.length} stop{groups.length === 1 ? "" : "s"} · each item at its own cheapest store
-          </Text>
-        </View>
+      {/* Task 8: this screen is now the "Shop" tab itself, not something
+          pushed on top of another screen -- so, like "My list"/"Browse"/
+          "Compare", it gets the plain tab header with no back arrow,
+          rather than the `subHeader`/`backBtn` pattern used by screens
+          that really are pushed (Item detail, Shopping mode, Trip
+          summary). There's deliberately no `onBack` prop any more. */}
+      <View style={styles.header}>
+        <Text style={styles.title}>Store lists</Text>
+        <Text style={styles.subtitle}>
+          {groups.length} stop{groups.length === 1 ? "" : "s"} · each item at its own cheapest store
+        </Text>
       </View>
 
       {groups.length > 0 && (
@@ -1919,30 +1929,166 @@ function TripSummaryScreen({ items, checkedItemIds, stores, onBack }) {
 }
 
 // ============================================================================
+// "Settings" screen (Task 8)
+// ============================================================================
+//
+// New, plain tab (no back arrow -- a tab root, same as "My list"/"Browse"/
+// "Compare"/"Shop"). Three sections, all agreed explicitly with the owner
+// rather than guessed: the list's editable name (ALSO still editable
+// inline on "My list" -- this is an additional place to change it, not a
+// replacement, since that inline editor already works and removing it
+// wasn't asked for); clearing data (checked-off items only, or the whole
+// list -- the latter guarded by a native confirmation since it can't be
+// undone); and a small read-only "About" section (app version, the
+// anonymous per-device id -- see DEVICE_ID_STORAGE_KEY's comment near the
+// top of this file for what that id is and isn't).
+
+// A full-width settings-style row for editing the list name -- distinct
+// from `ListLabelEditor` (the small tap-to-edit chip used in "My list"'s
+// compact header) rather than reusing it directly, since the two contexts
+// want different visual treatments (a chip inline with a title vs. a
+// normal form row), even though the commit logic (trim, fall back to the
+// default, uppercase) is the same.
+function SettingsListNameRow({ listLabel, onSetListLabel }) {
+  const [draft, setDraft] = useState(listLabel);
+
+  useEffect(() => {
+    setDraft(listLabel);
+  }, [listLabel]);
+
+  function commit() {
+    const trimmed = draft.trim();
+    onSetListLabel(trimmed ? trimmed.toUpperCase() : DEFAULT_LIST_LABEL);
+  }
+
+  return (
+    <View style={styles.settingsRow}>
+      <Text style={styles.settingsRowLabel}>List name</Text>
+      <TextInput
+        value={draft}
+        onChangeText={setDraft}
+        style={styles.settingsTextInput}
+        autoCapitalize="characters"
+        returnKeyType="done"
+        onSubmitEditing={commit}
+        onBlur={commit}
+        maxLength={30}
+      />
+    </View>
+  );
+}
+
+function SettingsScreen({
+  listLabel,
+  onSetListLabel,
+  itemCount,
+  checkedCount,
+  deviceId,
+  onClearCheckedItems,
+  onClearList,
+}) {
+  function confirmClearCheckedItems() {
+    Alert.alert(
+      "Clear checked-off items?",
+      "Every item currently ticked off (in Shopping mode) will be unchecked. Nothing is removed from the list itself.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Clear", style: "destructive", onPress: onClearCheckedItems },
+      ]
+    );
+  }
+
+  function confirmClearList() {
+    Alert.alert(
+      "Clear my list?",
+      "This removes every item on your list. This can't be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Clear list", style: "destructive", onPress: onClearList },
+      ]
+    );
+  }
+
+  return (
+    <ScrollView style={styles.screen} contentContainerStyle={styles.listContent}>
+      <View style={styles.header}>
+        <Text style={styles.title}>Settings</Text>
+      </View>
+
+      <Text style={styles.sectionLabel}>List</Text>
+      <SettingsListNameRow listLabel={listLabel} onSetListLabel={onSetListLabel} />
+
+      <Text style={styles.sectionLabel}>Data</Text>
+      <Pressable
+        style={[styles.settingsButtonRow, checkedCount === 0 && styles.settingsButtonRowDisabled]}
+        onPress={confirmClearCheckedItems}
+        disabled={checkedCount === 0}
+      >
+        <Text style={styles.settingsButtonText}>Clear checked-off items</Text>
+      </Pressable>
+      <Pressable
+        style={[
+          styles.settingsButtonRow,
+          styles.settingsButtonRowDanger,
+          itemCount === 0 && styles.settingsButtonRowDisabled,
+        ]}
+        onPress={confirmClearList}
+        disabled={itemCount === 0}
+      >
+        <Text style={[styles.settingsButtonText, styles.settingsButtonTextDanger]}>Clear my list</Text>
+      </Pressable>
+
+      <Text style={styles.sectionLabel}>About</Text>
+      <View style={styles.settingsRow}>
+        <Text style={styles.settingsRowLabel}>Version</Text>
+        <Text style={styles.settingsRowValue}>{APP_VERSION}</Text>
+      </View>
+      <View style={styles.settingsRow}>
+        <Text style={styles.settingsRowLabel}>Device id</Text>
+        <Text style={styles.settingsRowValue} numberOfLines={1}>
+          {deviceId || "—"}
+        </Text>
+      </View>
+      <Text style={styles.settingsFootnote}>
+        The device id is a random, meaningless string generated the first time this app opened on this
+        phone -- it's how your list is kept separate from anyone else's, nothing more.
+      </Text>
+    </ScrollView>
+  );
+}
+
+// ============================================================================
 // Navigation + top-level app
 // ============================================================================
 //
-// Three real destinations sit on a bottom tab bar: "My list", "Browse",
-// "Compare". "Item detail", "Store lists" and "Shopping mode" are NOT nested
-// inside those tabs -- they're screens on one root-level stack that sits
-// ABOVE the whole tab bar (the tab bar itself lives on a single "Tabs"
-// screen, `TabsScreen` below). That's a deliberate fix, not the original
-// design: an earlier version nested a small stack INSIDE the "My list" and
-// "Compare" tabs and hid the tab bar dynamically (by matching the nested
-// stack's currently-focused route name) whenever one of those pushed
-// screens was open. That version had a real bug -- going Store lists <->
-// Shopping mode worked, but there was no reliable way back out to the
-// three main tabs, because the tab bar's visibility depended on correctly
-// re-deriving the focused nested route on every render, which is fragile.
-// Putting these screens on the ROOT stack instead removes that failure
-// mode entirely: the tab bar physically doesn't exist outside the "Tabs"
-// screen, so there's nothing to get stuck in a wrong state -- going back
-// is always just one root-stack `goBack()` away from any of these screens,
-// and it lands you back on whichever tab you left, exactly as it was.
-// `navigation.navigate("StoreLists")` etc. called from inside a tab still
-// works reaching a root-level screen -- React Navigation walks up the
-// navigator tree to find a screen name that isn't in the current
-// navigator, so no extra plumbing is needed at the call sites below.
+// Five real destinations sit on a bottom tab bar: "My list", "Browse",
+// "Compare", "Shop" (Task 8 -- the existing Store lists screen, now also a
+// tab, not just something Compare pushes you into), and "Settings" (new,
+// Task 8). "Item detail", "Shopping mode" and "Trip summary" are NOT
+// nested inside those tabs -- they're screens on one root-level stack that
+// sits ABOVE the whole tab bar (the tab bar itself lives on a single
+// "Tabs" screen, `TabsScreen` below). That's a deliberate fix, not the
+// original design: an earlier version nested a small stack INSIDE the "My
+// list" and "Compare" tabs and hid the tab bar dynamically (by matching
+// the nested stack's currently-focused route name) whenever one of those
+// pushed screens was open. That version had a real bug -- going Store
+// lists <-> Shopping mode worked, but there was no reliable way back out
+// to the main tabs, because the tab bar's visibility depended on
+// correctly re-deriving the focused nested route on every render, which is
+// fragile. Putting these screens on the ROOT stack instead removes that
+// failure mode entirely: the tab bar physically doesn't exist outside the
+// "Tabs" screen, so there's nothing to get stuck in a wrong state -- going
+// back is always just one root-stack `goBack()` away from any of these
+// screens, and it lands you back on whichever tab you left, exactly as it
+// was. `navigation.navigate("Shopping", ...)` etc. called from inside the
+// new "Shop" tab still works reaching a root-level screen -- React
+// Navigation walks up the navigator tree to find a screen name that isn't
+// in the current navigator, so no extra plumbing is needed at the call
+// sites below. Store lists itself moving FROM a pushed root screen TO a
+// tab is safe specifically because nothing about tab-bar visibility
+// changes for it -- it's simply always on the tab bar now, the same as
+// "My list"/"Browse"/"Compare" always were; the fragile dynamic-hiding
+// pattern that caused the original bug is never involved.
 //
 // All the app's real state (the list, categories, stores, loading/busy
 // flags, the in-memory checked-off set) lives in `App()`, same as before,
@@ -2040,7 +2186,11 @@ function CompareRoute({ navigation }) {
       loading={loading}
       refreshing={refreshing}
       onRefresh={onRefresh}
-      onSplit={() => navigation.navigate("StoreLists")}
+      // Task 8: "Split into store lists" now switches to the "Shop" tab
+      // (a sibling tab in this same Tab.Navigator) instead of pushing the
+      // old standalone "StoreLists" root screen, which no longer exists --
+      // Store lists IS the Shop tab now.
+      onSplit={() => navigation.navigate("ShopTab")}
     />
   );
 }
@@ -2051,7 +2201,6 @@ function StoreListsRoute({ navigation }) {
     <StoreListsScreen
       items={items}
       checkedItemIds={checkedItemIds}
-      onBack={() => navigation.goBack()}
       onOpenShopping={(storeId) => navigation.navigate("Shopping", { storeId })}
       onViewTripSummary={() => navigation.navigate("TripSummary")}
     />
@@ -2067,16 +2216,17 @@ function ShoppingRoute({ navigation, route }) {
       onToggleItem={handleToggleChecked}
       storeId={route.params.storeId}
       onSwitchStore={(storeId) => navigation.setParams({ storeId })}
-      // goBack(), not navigate("StoreLists") -- Shopping is always pushed
-      // directly on top of Store lists on the root stack (see the comment
-      // above), so popping one level is both simpler and exactly right,
-      // the same way it is for every other back arrow in this file.
+      // goBack(), not navigate(...) -- Shopping is always pushed directly
+      // on top of wherever it was opened from (the "Shop" tab's Store
+      // lists screen), so popping one level is both simpler and exactly
+      // right, the same way it is for every other back arrow in this file.
       onBack={() => navigation.goBack()}
       // Replaces Shopping mode altogether, rather than pushing on top of
       // it -- once a trip is finished there's nothing to "go back" to in
       // Shopping mode for this stop; `navigate` here lands on the
       // TripSummary screen sitting where Shopping was, one root-stack pop
-      // away from Store lists, same depth as everywhere else in this file.
+      // away from the "Shop" tab, same depth as everywhere else in this
+      // file.
       onViewTripSummary={() => navigation.navigate("TripSummary")}
     />
   );
@@ -2090,6 +2240,29 @@ function TripSummaryRoute({ navigation }) {
       checkedItemIds={checkedItemIds}
       stores={stores}
       onBack={() => navigation.goBack()}
+    />
+  );
+}
+
+function SettingsRoute() {
+  const {
+    deviceId,
+    items,
+    checkedItemIds,
+    listLabel,
+    onSetListLabel,
+    handleClearCheckedItems,
+    handleClearList,
+  } = useAppState();
+  return (
+    <SettingsScreen
+      listLabel={listLabel}
+      onSetListLabel={onSetListLabel}
+      itemCount={items.length}
+      checkedCount={checkedItemIds.size}
+      deviceId={deviceId}
+      onClearCheckedItems={handleClearCheckedItems}
+      onClearList={handleClearList}
     />
   );
 }
@@ -2139,26 +2312,92 @@ function TabIcon({ shape, color, size = 22 }) {
       </View>
     );
   }
-  // "compare" -- a little bar chart
+  if (shape === "compare") {
+    // a little bar chart
+    return (
+      <View
+        style={{
+          width: size,
+          height: size,
+          flexDirection: "row",
+          alignItems: "flex-end",
+          justifyContent: "center",
+          gap: 3,
+        }}
+      >
+        <View style={{ width: size * 0.22, height: size * 0.5, borderRadius: 2, backgroundColor: color }} />
+        <View style={{ width: size * 0.22, height: size * 0.85, borderRadius: 2, backgroundColor: color }} />
+        <View style={{ width: size * 0.22, height: size * 0.34, borderRadius: 2, backgroundColor: color }} />
+      </View>
+    );
+  }
+  if (shape === "shop") {
+    // Task 8 -- a simple shopping bag: a trapezoid body plus a short
+    // curved-looking handle (two short diagonal strokes), same
+    // plain-View approach as every other tab icon here.
+    return (
+      <View style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
+        <View
+          style={{
+            width: size * 0.56,
+            height: size * 0.5,
+            borderRadius: 3,
+            borderWidth: 2.2,
+            borderColor: color,
+            marginTop: size * 0.12,
+          }}
+        />
+        <View
+          style={{
+            position: "absolute",
+            top: size * 0.08,
+            width: size * 0.3,
+            height: size * 0.26,
+            borderRadius: size * 0.15,
+            borderWidth: 2.2,
+            borderColor: color,
+            borderBottomWidth: 0,
+          }}
+        />
+      </View>
+    );
+  }
+  // "settings" -- a gear: an outer ring plus four short notches
   return (
-    <View
-      style={{
-        width: size,
-        height: size,
-        flexDirection: "row",
-        alignItems: "flex-end",
-        justifyContent: "center",
-        gap: 3,
-      }}
-    >
-      <View style={{ width: size * 0.22, height: size * 0.5, borderRadius: 2, backgroundColor: color }} />
-      <View style={{ width: size * 0.22, height: size * 0.85, borderRadius: 2, backgroundColor: color }} />
-      <View style={{ width: size * 0.22, height: size * 0.34, borderRadius: 2, backgroundColor: color }} />
+    <View style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
+      <View
+        style={{
+          width: size * 0.56,
+          height: size * 0.56,
+          borderRadius: size * 0.28,
+          borderWidth: 2.2,
+          borderColor: color,
+        }}
+      />
+      {[0, 45, 90, 135].map((deg) => (
+        <View
+          key={deg}
+          style={{
+            position: "absolute",
+            width: size * 0.78,
+            height: 2.2,
+            backgroundColor: color,
+            borderRadius: 2,
+            transform: [{ rotate: `${deg}deg` }],
+          }}
+        />
+      ))}
     </View>
   );
 }
 
-const TAB_ICON_SHAPES = { ListTab: "list", Browse: "browse", CompareTab: "compare" };
+const TAB_ICON_SHAPES = {
+  ListTab: "list",
+  Browse: "browse",
+  CompareTab: "compare",
+  ShopTab: "shop",
+  SettingsTab: "settings",
+};
 
 // The screen that actually renders the three-tab bar. Kept as its own
 // stable, module-level component (not inlined into App()'s return) for the
@@ -2180,6 +2419,12 @@ function TabsScreen() {
       <Tab.Screen name="ListTab" component={ListRoute} options={{ tabBarLabel: "My list" }} />
       <Tab.Screen name="Browse" component={BrowseRoute} />
       <Tab.Screen name="CompareTab" component={CompareRoute} options={{ tabBarLabel: "Compare" }} />
+      {/* Task 8: the existing Store lists screen, now ALSO reachable as its
+          own tab (not just via Compare's "Split into store lists" button,
+          which now switches to this tab instead of pushing a separate
+          screen -- see CompareRoute's onSplit below). */}
+      <Tab.Screen name="ShopTab" component={StoreListsRoute} options={{ tabBarLabel: "Shop" }} />
+      <Tab.Screen name="SettingsTab" component={SettingsRoute} options={{ tabBarLabel: "Settings" }} />
     </Tab.Navigator>
   );
 }
@@ -2366,7 +2611,37 @@ export default function App() {
     });
   }
 
+  // Task 8 (Settings): un-ticks everything without touching the list
+  // itself -- for starting a new shopping trip against the same list
+  // without having to manually uncheck every item from the last one.
+  function handleClearCheckedItems() {
+    setCheckedItemIds(new Set());
+  }
+
+  // Task 8 (Settings): removes every item from the list. There's no bulk
+  // "clear" endpoint on the backend (see `handleRemove` above -- items are
+  // deleted one at a time), so this just calls the same DELETE the swipe-
+  // to-remove action already uses, once per item, awaited in sequence
+  // (not `Promise.all`) so each request sees a consistent "remaining
+  // items" state server-side rather than racing. Confirmed with the user
+  // via a native confirmation dialog before this is ever called (see
+  // `SettingsScreen`) -- this is destructive and can't be undone.
+  async function handleClearList() {
+    if (!deviceId || items.length === 0) return;
+    setErrorMessage(null);
+    try {
+      for (const item of items) {
+        await fetchJson(`/lists/${deviceId}/items/${item.item_id}`, { method: "DELETE" });
+      }
+      setItems([]);
+      setCheckedItemIds(new Set());
+    } catch (err) {
+      setErrorMessage(err.message || "Couldn't clear the list");
+    }
+  }
+
   const appState = {
+    deviceId,
     items,
     categories,
     stores,
@@ -2383,6 +2658,8 @@ export default function App() {
     handleQuantityChange,
     handleRemove,
     handleToggleChecked,
+    handleClearCheckedItems,
+    handleClearList,
   };
 
   return (
@@ -2404,7 +2681,11 @@ export default function App() {
             <RootStack.Navigator screenOptions={{ headerShown: false }}>
               <RootStack.Screen name="Tabs" component={TabsScreen} />
               <RootStack.Screen name="ItemDetail" component={ItemDetailRoute} />
-              <RootStack.Screen name="StoreLists" component={StoreListsRoute} />
+              {/* Task 8: "StoreLists" is no longer a separate root screen --
+                  it's the "Shop" tab now (see TabsScreen above). Shopping
+                  mode is still pushed on the root stack, reached by
+                  `navigate("Shopping", ...)` from inside that tab, same
+                  cross-navigator pattern as before. */}
               <RootStack.Screen name="Shopping" component={ShoppingRoute} />
               <RootStack.Screen name="TripSummary" component={TripSummaryRoute} />
             </RootStack.Navigator>
@@ -2755,6 +3036,44 @@ const styles = StyleSheet.create({
     marginTop: 20,
     marginBottom: 9,
   },
+
+  // Settings screen (Task 8).
+  settingsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#e1e0d9",
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 8,
+  },
+  settingsRowLabel: { fontSize: 14, color: "#0b0b0b" },
+  settingsRowValue: { fontSize: 13, color: "#52514e", maxWidth: 180 },
+  settingsTextInput: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#0b0b0b",
+    textAlign: "right",
+    flex: 1,
+    marginLeft: 12,
+  },
+  settingsButtonRow: {
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#e1e0d9",
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    marginBottom: 8,
+  },
+  settingsButtonText: { fontSize: 14, fontWeight: "600", color: "#0b0b0b" },
+  settingsButtonRowDanger: { borderColor: "#f3cfcb" },
+  settingsButtonRowDisabled: { opacity: 0.45 },
+  settingsButtonTextDanger: { color: "#c0392b" },
+  settingsFootnote: { fontSize: 11.5, color: "#898781", lineHeight: 16, marginTop: 4 },
 
   detailBestCard: {
     backgroundColor: "#0b0b0b",
