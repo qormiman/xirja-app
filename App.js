@@ -1498,8 +1498,13 @@ function StoreListCard({ group, maxTotal, checkedCount, onOpen }) {
   );
 }
 
-function StoreListsScreen({ items, checkedItemIds, onBack, onOpenShopping }) {
+function StoreListsScreen({ items, checkedItemIds, onBack, onOpenShopping, onViewTripSummary }) {
   const { groups, maxTotal, unpriced } = useMemo(() => computeStoreLists(items), [items]);
+  // Task 7: available any time from here, not just once a trip is fully
+  // checked off (see ShoppingScreen's bottom bar for that second entry
+  // point) -- someone might want to glance at the plan/savings mid-trip,
+  // not only at the very end.
+  const anyChecked = groups.some((g) => g.items.some((it) => checkedItemIds.has(it.item_id)));
 
   return (
     <View style={styles.screen}>
@@ -1514,6 +1519,14 @@ function StoreListsScreen({ items, checkedItemIds, onBack, onOpenShopping }) {
           </Text>
         </View>
       </View>
+
+      {groups.length > 0 && (
+        <Pressable onPress={onViewTripSummary} style={styles.tripSummaryLinkRow} hitSlop={6}>
+          <Text style={styles.tripSummaryLinkText}>
+            {anyChecked ? "View trip summary" : "Preview trip summary"} →
+          </Text>
+        </Pressable>
+      )}
 
       <FlatList
         data={groups}
@@ -1628,7 +1641,15 @@ function ShoppingRow({ item, checked, onToggle }) {
   );
 }
 
-function ShoppingScreen({ items, checkedItemIds, onToggleItem, storeId, onSwitchStore, onBack }) {
+function ShoppingScreen({
+  items,
+  checkedItemIds,
+  onToggleItem,
+  storeId,
+  onSwitchStore,
+  onBack,
+  onViewTripSummary,
+}) {
   const { groups } = useMemo(() => computeStoreLists(items), [items]);
   const group = groups.find((g) => g.storeId === storeId);
   // Department sections for this stop's list (Task 6) -- recomputed
@@ -1741,15 +1762,158 @@ function ShoppingScreen({ items, checkedItemIds, onToggleItem, storeId, onSwitch
             <Text style={styles.bottomBarButtonText}>Next: {nextUnfinished.name}</Text>
             <Text style={styles.bottomBarArrow}>→</Text>
           </Pressable>
+        ) : checkedCount === totalCount ? (
+          // No other stop has anything left AND this one is fully checked
+          // too -- the whole trip is done, not just this stop. Task 7: this
+          // is the one moment the app can be confident there's a finished
+          // trip to summarize, so the CTA becomes "view trip summary"
+          // instead of just going back to an empty Store lists screen.
+          <Pressable onPress={onViewTripSummary} style={styles.bottomBarButton}>
+            <Text style={styles.bottomBarButtonText}>Trip finished — view summary</Text>
+            <Text style={styles.bottomBarArrow}>→</Text>
+          </Pressable>
         ) : (
           <Pressable onPress={onBack} style={styles.bottomBarButton}>
-            <Text style={styles.bottomBarButtonText}>
-              {checkedCount === totalCount ? "Done -- back to store lists" : "Back to store lists"}
-            </Text>
+            <Text style={styles.bottomBarButtonText}>Back to store lists</Text>
             <Text style={styles.bottomBarArrow}>→</Text>
           </Pressable>
         )}
       </View>
+    </View>
+  );
+}
+
+// ============================================================================
+// "Trip summary" screen (Task 7)
+// ============================================================================
+//
+// Reachable two ways: a standing "View trip summary" link at the top of
+// Store lists (any time -- even before anything's been checked off, to
+// preview the plan and its savings), and automatically offered from
+// Shopping mode's bottom bar once every stop, including the one just
+// finished, has nothing left to check off.
+//
+// Deliberately built from data that already exists rather than a new
+// concept: `computeStoreLists` for the per-store split (same as Store
+// lists / Shopping mode), `checkedItemIds` for what's actually been bought
+// so far (same persisted set Shopping mode uses), and `computeStoreRanking`
+// (the same "whole basket at one store" comparison Compare's "One store"
+// tab already shows) as the baseline for the savings figure -- one
+// calculation reused three times rather than three that could quietly
+// disagree with each other.
+
+function computeTripSummary(items, checkedItemIds, stores) {
+  const { groups } = computeStoreLists(items);
+  const storeSections = groups.map((group) => {
+    const boughtItems = group.items.filter((it) => checkedItemIds.has(it.item_id));
+    const spent = boughtItems.reduce((sum, it) => sum + it.lineTotal, 0);
+    return {
+      ...group,
+      boughtItems,
+      spent,
+      allChecked: group.items.length > 0 && boughtItems.length === group.items.length,
+    };
+  });
+  const totalSpent = storeSections.reduce((sum, g) => sum + g.spent, 0);
+  // The full planned split total -- not just what's been checked off so
+  // far -- is the right thing to compare against "everything at one
+  // store," since that's the trip actually being taken (or about to be),
+  // regardless of how much of it is done at the moment this screen is
+  // viewed.
+  const plannedTotal = groups.reduce((sum, g) => sum + g.total, 0);
+  const ranking = stores.length > 0 ? computeStoreRanking(items, stores) : [];
+  const singleStoreBaseline = ranking.length > 0 ? ranking[0] : null;
+  const savings = singleStoreBaseline ? Math.max(0, singleStoreBaseline.comparable - plannedTotal) : 0;
+  return { storeSections, totalSpent, plannedTotal, singleStoreBaseline, savings };
+}
+
+function TripSummaryStoreCard({ group }) {
+  return (
+    <View style={styles.tripStoreCard}>
+      <View style={styles.storeListTop}>
+        <View style={[styles.storeListChip, { backgroundColor: group.color }]}>
+          <Text style={styles.storeListChipText}>{group.shortCode}</Text>
+        </View>
+        <View style={styles.storeListMain}>
+          <Text style={styles.storeListName}>{group.name}</Text>
+          <Text style={styles.storeListMeta}>
+            {group.allChecked
+              ? "All bought ✓"
+              : group.boughtItems.length > 0
+              ? `${group.boughtItems.length} of ${group.items.length} bought so far`
+              : "Not started yet"}
+          </Text>
+        </View>
+        <View style={{ alignItems: "flex-end" }}>
+          <Text style={styles.storeListTotal}>{eur(group.spent)}</Text>
+          {group.spent < group.total - 0.004 && (
+            <Text style={styles.tripStorePlanned}>of {eur(group.total)} planned</Text>
+          )}
+        </View>
+      </View>
+      {group.boughtItems.length > 0 ? (
+        <View style={styles.compareBreakdown}>
+          {group.boughtItems.map((it) => (
+            <View key={it.item_id} style={styles.compareBreakdownRow}>
+              <View style={[styles.compareBreakdownDot, { backgroundColor: group.color }]} />
+              <Text style={styles.compareBreakdownName} numberOfLines={1}>
+                {it.category}
+              </Text>
+              <Text style={styles.compareBreakdownPrice}>{eur(it.lineTotal)}</Text>
+            </View>
+          ))}
+        </View>
+      ) : (
+        <Text style={styles.tripStoreEmptyNote}>
+          Nothing bought here yet -- tick items off in Shopping mode to see them listed.
+        </Text>
+      )}
+    </View>
+  );
+}
+
+function TripSummaryScreen({ items, checkedItemIds, stores, onBack }) {
+  const { storeSections, totalSpent, plannedTotal, singleStoreBaseline, savings } = useMemo(
+    () => computeTripSummary(items, checkedItemIds, stores),
+    [items, checkedItemIds, stores]
+  );
+
+  return (
+    <View style={styles.screen}>
+      <View style={styles.subHeader}>
+        <Pressable onPress={onBack} style={styles.backBtn}>
+          <Text style={styles.backBtnText}>‹</Text>
+        </Pressable>
+        <View style={styles.subHeaderText}>
+          <Text style={styles.title}>Trip summary</Text>
+          <Text style={styles.subtitle}>
+            {eur(totalSpent)} spent
+            {plannedTotal > totalSpent + 0.004 ? ` of ${eur(plannedTotal)} planned` : ""}
+          </Text>
+        </View>
+      </View>
+
+      {singleStoreBaseline && savings > 0.004 && (
+        <View style={styles.tripSavingsBanner}>
+          <Text style={styles.tripSavingsLabel}>This trip saves</Text>
+          <Text style={styles.tripSavingsValue}>{eur(savings)}</Text>
+          <Text style={styles.tripSavingsNote}>
+            vs. buying everything at {singleStoreBaseline.name} alone
+          </Text>
+        </View>
+      )}
+
+      <FlatList
+        data={storeSections}
+        keyExtractor={(g) => g.storeId}
+        contentContainerStyle={styles.listContent}
+        renderItem={({ item: group }) => <TripSummaryStoreCard group={group} />}
+        ListEmptyComponent={
+          <Text style={styles.emptyText}>
+            Nothing planned yet -- add items with a real price first, then split into store lists.
+          </Text>
+        }
+      />
     </View>
   );
 }
@@ -1889,6 +2053,7 @@ function StoreListsRoute({ navigation }) {
       checkedItemIds={checkedItemIds}
       onBack={() => navigation.goBack()}
       onOpenShopping={(storeId) => navigation.navigate("Shopping", { storeId })}
+      onViewTripSummary={() => navigation.navigate("TripSummary")}
     />
   );
 }
@@ -1906,6 +2071,24 @@ function ShoppingRoute({ navigation, route }) {
       // directly on top of Store lists on the root stack (see the comment
       // above), so popping one level is both simpler and exactly right,
       // the same way it is for every other back arrow in this file.
+      onBack={() => navigation.goBack()}
+      // Replaces Shopping mode altogether, rather than pushing on top of
+      // it -- once a trip is finished there's nothing to "go back" to in
+      // Shopping mode for this stop; `navigate` here lands on the
+      // TripSummary screen sitting where Shopping was, one root-stack pop
+      // away from Store lists, same depth as everywhere else in this file.
+      onViewTripSummary={() => navigation.navigate("TripSummary")}
+    />
+  );
+}
+
+function TripSummaryRoute({ navigation }) {
+  const { items, checkedItemIds, stores } = useAppState();
+  return (
+    <TripSummaryScreen
+      items={items}
+      checkedItemIds={checkedItemIds}
+      stores={stores}
       onBack={() => navigation.goBack()}
     />
   );
@@ -2223,6 +2406,7 @@ export default function App() {
               <RootStack.Screen name="ItemDetail" component={ItemDetailRoute} />
               <RootStack.Screen name="StoreLists" component={StoreListsRoute} />
               <RootStack.Screen name="Shopping" component={ShoppingRoute} />
+              <RootStack.Screen name="TripSummary" component={TripSummaryRoute} />
             </RootStack.Navigator>
           </NavigationContainer>
         </AppStateContext.Provider>
@@ -2525,6 +2709,41 @@ const styles = StyleSheet.create({
     marginTop: 4,
     lineHeight: 16,
   },
+
+  // The standing "View trip summary" link at the top of Store lists (Task
+  // 7) -- a plain text link rather than a full button, since it's a
+  // secondary action sitting right above the primary list of store cards.
+  tripSummaryLinkRow: { paddingHorizontal: 20, marginBottom: 10 },
+  tripSummaryLinkText: { fontSize: 12.5, fontWeight: "600", color: "#0ca30c" },
+
+  // Trip summary's per-store cards (Task 7) reuse `storeListCard`'s look
+  // (chip/name/meta row) via the shared style names above -- only the
+  // pieces unique to this screen (the "of €X planned" note, the empty-store
+  // note, the receipt rows via `compareBreakdown*`, already shared with
+  // Compare's expandable breakdown) get their own styles here.
+  tripStoreCard: {
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#e1e0d9",
+    borderRadius: 16,
+    padding: 15,
+    marginBottom: 10,
+  },
+  tripStorePlanned: { fontSize: 10.5, color: "#898781", marginTop: 2 },
+  tripStoreEmptyNote: { fontSize: 12, color: "#898781", fontStyle: "italic", marginTop: 2 },
+
+  tripSavingsBanner: {
+    marginHorizontal: 20,
+    marginBottom: 14,
+    padding: 14,
+    borderRadius: 14,
+    backgroundColor: "#eef8ee",
+    borderWidth: 1,
+    borderColor: "#c9ead0",
+  },
+  tripSavingsLabel: { fontSize: 11.5, fontWeight: "600", color: "#3f7d3f" },
+  tripSavingsValue: { fontSize: 22, fontWeight: "700", color: "#0ca30c", marginTop: 2 },
+  tripSavingsNote: { fontSize: 11.5, color: "#3f7d3f", marginTop: 2 },
 
   centerFillSmall: { paddingVertical: 24, alignItems: "center" },
   sectionLabel: {
